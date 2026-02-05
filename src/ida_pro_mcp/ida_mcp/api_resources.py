@@ -6,6 +6,7 @@ Use tools for actions that modify state or perform expensive computations.
 
 from typing import Annotated
 
+import ida_entry
 import ida_funcs
 import ida_nalt
 import ida_segment
@@ -22,6 +23,7 @@ from .utils import (
     StructureDefinition,
     StructureMember,
     get_image_size,
+    get_type_ordinal_limit,
     parse_address,
 )
 
@@ -100,11 +102,11 @@ def idb_segments_resource() -> list[Segment]:
 def idb_entrypoints_resource() -> list[dict]:
     """Get entry points (main, TLS callbacks, etc.)"""
     entrypoints = []
-    entry_count = ida_nalt.get_entry_qty()
+    entry_count = ida_entry.get_entry_qty()
     for i in range(entry_count):
-        ordinal = ida_nalt.get_entry_ordinal(i)
-        ea = ida_nalt.get_entry(ordinal)
-        name = ida_nalt.get_entry_name(ordinal)
+        ordinal = ida_entry.get_entry_ordinal(i)
+        ea = ida_entry.get_entry(ordinal)
+        name = ida_entry.get_entry_name(ordinal)
         entrypoints.append({"addr": hex(ea), "name": name, "ordinal": ordinal})
     return entrypoints
 
@@ -160,7 +162,7 @@ def selection_resource() -> dict:
 def types_resource() -> list[dict]:
     """Get all local types"""
     types = []
-    for ordinal in range(1, ida_typeinf.get_ordinal_qty(None)):
+    for ordinal in range(1, get_type_ordinal_limit(None)):
         tif = ida_typeinf.tinfo_t()
         if tif.get_numbered_type(None, ordinal):
             name = tif.get_type_name()
@@ -173,7 +175,7 @@ def types_resource() -> list[dict]:
 def structs_resource() -> list[dict]:
     """Get all structures/unions"""
     structs = []
-    limit = ida_typeinf.get_ordinal_limit()
+    limit = get_type_ordinal_limit()
     for ordinal in range(1, limit):
         tif = ida_typeinf.tinfo_t()
         if tif.get_numbered_type(None, ordinal) and tif.is_udt():
@@ -258,11 +260,11 @@ def import_name_resource(name: Annotated[str, "Import name"]) -> dict:
 @idasync
 def export_name_resource(name: Annotated[str, "Export name"]) -> dict:
     """Get specific export details by name"""
-    entry_count = ida_nalt.get_entry_qty()
+    entry_count = ida_entry.get_entry_qty()
     for i in range(entry_count):
-        ordinal = ida_nalt.get_entry_ordinal(i)
-        ea = ida_nalt.get_entry(ordinal)
-        entry_name = ida_nalt.get_entry_name(ordinal)
+        ordinal = ida_entry.get_entry_ordinal(i)
+        ea = ida_entry.get_entry(ordinal)
+        entry_name = ida_entry.get_entry_name(ordinal)
 
         if entry_name == name:
             return {

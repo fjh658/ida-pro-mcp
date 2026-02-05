@@ -15,6 +15,7 @@ from .utils import (
     normalize_dict_list,
     parse_address,
     get_type_by_name,
+    get_type_ordinal_limit,
     parse_decls_ctypes,
     my_modifier_t,
     StructRead,
@@ -231,7 +232,7 @@ def search_structs(
 ) -> list[dict]:
     """Search structs"""
     results = []
-    limit = ida_typeinf.get_ordinal_limit()
+    limit = get_type_ordinal_limit()
 
     for ordinal in range(1, limit):
         tif = ida_typeinf.tinfo_t()

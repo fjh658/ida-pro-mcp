@@ -398,6 +398,16 @@ class Page(TypedDict, Generic[T]):
 # ============================================================================
 
 
+def get_type_ordinal_limit(til=None) -> int:
+    """Get ordinal limit for type enumeration.
+
+    Compatible with IDA 8.3 (get_ordinal_qty) and IDA 8.4+ (get_ordinal_limit).
+    """
+    if hasattr(ida_typeinf, "get_ordinal_limit"):
+        return ida_typeinf.get_ordinal_limit(til)
+    return ida_typeinf.get_ordinal_qty(til)
+
+
 def get_image_size() -> int:
     try:
         info = idaapi.get_inf_structure()
