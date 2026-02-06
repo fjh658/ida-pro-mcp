@@ -1,10 +1,22 @@
 # IDA Pro MCP
 
+<div align="center">
+
+**[English](#english)**
+
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
 https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
 
 The binaries and prompt for the video are available in the [mcp-reversing-dataset](https://github.com/mrexodia/mcp-reversing-dataset) repository.
+
+</div>
+
+---
+
+<a name="english"></a>
+<details open>
+<summary><h2>🇺🇸 English Documentation</h2></summary>
 
 ## Prerequisites
 
@@ -57,6 +69,61 @@ ida-pro-mcp --install
 https://github.com/user-attachments/assets/65ed3373-a187-4dd5-a807-425dca1d8ee9
 
 _Note_: You need to load a binary in IDA before the plugin menu will show up.
+
+## Usage (Broker Mode)
+
+```bash
+# 1. Start Broker first (required for multi Cursor windows / multi IDA)
+uv run ida-pro-mcp --broker
+# Or specify port: uv run ida-pro-mcp --broker --port 13337
+
+# 2. Start Cursor, MCP connects via stdio and requests the Broker above
+
+# 3. Open IDA, load binary, press Ctrl+Alt+M to connect (IDA connects to Broker's 13337 port)
+```
+
+### Architecture
+
+- **Broker**: Separate process, unique listener on `127.0.0.1:13337`, holds IDA instance registry; both IDA and MCP clients connect to it.
+- **MCP Process**: Started by Cursor per window (stdio), **does not bind port**, requests Broker via HTTP.
+- **IDA Plugin**: Connects to `127.0.0.1:13337` (Broker).
+
+```
+┌─────────────────┐     stdio      ┌─────────────────┐     HTTP        ┌─────────────────┐
+│  Cursor Win A   │◄──────────────►│   MCP Process A │─────────────────►│                 │
+└─────────────────┘                └─────────────────┘                 │     Broker      │
+                                                                        │  (unique :13337)│
+┌─────────────────┐     stdio      ┌─────────────────┐     HTTP        │                 │
+│  Cursor Win B   │◄──────────────►│   MCP Process B │─────────────────►│   REGISTRY      │
+└─────────────────┘                └─────────────────┘                 │                 │
+                                                                        └────────▲───────┘
+┌─────────────────┐     HTTP register + SSE                               │
+│   IDA 1/2       │◄───────────────────────────────────────────────────────┘
+└─────────────────┘
+```
+
+### Multi-Instance Mode
+
+When analyzing multiple binaries simultaneously, just open multiple IDAs and press Ctrl+Alt+M in each.
+
+| Tool | Description |
+|------|-------------|
+| `instance_list` | List all connected IDA instances |
+| `instance_switch` | Switch current active instance |
+| `instance_current` | View current instance info |
+| `instance_info` | Get detailed info for specified instance |
+
+## Command Line Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `--install` | Install IDA plugin and MCP client configuration |
+| `--uninstall` | Uninstall IDA plugin and MCP client configuration |
+| `--unsafe` | Enable unsafe tools (debugger related) |
+| `--broker` | **Start Broker only** (HTTP), no stdio; run separately for multi-window/multi-IDA |
+| `--broker-url URL` | Broker URL for MCP mode, default `http://127.0.0.1:13337` |
+| `--port PORT` | Broker mode listen port, default 13337 |
+| `--config` | Print MCP configuration info |
 
 ## Prompt Engineering
 
@@ -146,7 +213,6 @@ uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
-
 ## MCP Resources
 
 **Resources** represent browsable state (read-only data) following MCP's philosophy.
@@ -209,10 +275,17 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 
 ## Debugger Operations (Extension)
 
-Debugger tools are hidden by default. Enable with `?ext=dbg` query parameter:
+Debugger tools are hidden by default. Enable with `--unsafe` flag:
 
-```
-http://127.0.0.1:13337/mcp?ext=dbg
+```json
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "command": "uv",
+      "args": ["run", "ida-pro-mcp", "--unsafe"]
+    }
+  }
+}
 ```
 
 **Control:**
@@ -327,3 +400,5 @@ Generate the changelog of direct commits to `main`:
 ```sh
 git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
+
+</details>

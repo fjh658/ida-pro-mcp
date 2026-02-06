@@ -1,14 +1,13 @@
-"""IDA Pro MCP Plugin - Modular Package Version
+"""IDA Pro MCP Plugin - Modular Package Version (HTTP+SSE).
 
-This package provides MCP (Model Context Protocol) integration for IDA Pro,
-enabling AI assistants to interact with IDA's disassembler and decompiler.
+Communicates with MCP server via HTTP+SSE.
 
 Architecture:
 - rpc.py: JSON-RPC infrastructure and registry
-- mcp.py: MCP protocol server (HTTP/SSE)
 - sync.py: IDA synchronization decorator (@idasync)
 - utils.py: Shared helpers and TypedDict definitions
 - api_*.py: Modular API implementations (71 tools + 24 resources)
+- api_instances.py: HTTP+SSE connection management
 """
 
 # Import infrastructure modules
@@ -26,12 +25,19 @@ from . import api_stack
 from . import api_debug
 from . import api_python
 from . import api_resources
+from . import api_instances
 
 # Re-export key components for external use
 from .sync import idasync, IDAError, IDASyncError, CancelledError
 from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource
-from .http import IdaMcpHttpRequestHandler
 from .api_core import init_caches
+from .api_instances import (
+    connect_to_server,
+    disconnect,
+    is_connected,
+    get_instance_id,
+    set_auto_reconnect,
+)
 
 __all__ = [
     # Infrastructure modules
@@ -48,6 +54,7 @@ __all__ = [
     "api_debug",
     "api_python",
     "api_resources",
+    "api_instances",
     # Re-exported components
     "idasync",
     "IDAError",
@@ -58,6 +65,11 @@ __all__ = [
     "tool",
     "unsafe",
     "resource",
-    "IdaMcpHttpRequestHandler",
     "init_caches",
+    # HTTP+SSE connection management
+    "connect_to_server",
+    "disconnect",
+    "is_connected",
+    "get_instance_id",
+    "set_auto_reconnect",
 ]

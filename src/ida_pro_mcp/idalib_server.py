@@ -1,3 +1,6 @@
+"""IDALib MCP server - headless mode."""
+
+import os
 import sys
 import signal
 import logging
@@ -8,9 +11,6 @@ from pathlib import Path
 import idapro
 
 from ida_pro_mcp.ida_mcp import MCP_SERVER
-
-"""IDALib-specific MCP tools for managing multiple binary sessions
-"""
 from typing import Annotated, Optional
 from ida_pro_mcp.ida_mcp.rpc import tool
 from ida_pro_mcp.idalib_session_manager import get_session_manager
@@ -159,6 +159,8 @@ def idalib_switch(session_id: Annotated[str, "Session ID to switch to"]) -> dict
                 "session": session.to_dict(),
                 "message": f"Switched to session: {session_id} ({session.input_path.name})",
             }
+        else:
+            return {"error": f"Failed to switch to session: {session_id}"}
     except ValueError as e:
         return {"error": str(e)}
     except RuntimeError as e:
@@ -315,7 +317,7 @@ def main():
     from ida_pro_mcp.idalib_session_manager import get_session_manager
 
     session_manager = get_session_manager()
-
+    
     # Open initial binary if provided
     if args.input_path is not None:
         if not args.input_path.exists():
@@ -347,6 +349,8 @@ def main():
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread (this one) does not fake any
     # work from @idasync, so we deadlock.
+    logger.info(f"MCP service started: http://{args.host}:{args.port}/mcp")
+    
     MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 

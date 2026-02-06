@@ -54,7 +54,12 @@ call_stack = queue.LifoQueue()
 
 
 def _sync_wrapper(ff):
-    """Call a function ff with a specific IDA safety_mode."""
+    """Call a function ff on IDA main thread with batch mode enabled.
+    
+    Batch mode must be set and restored on the IDA main thread; otherwise,
+    global IDA state can become inconsistent and affect user interactions
+    (for example, the G-key jump dialog).
+    """
 
     res_container = queue.Queue()
 
@@ -65,13 +70,14 @@ def _sync_wrapper(ff):
             raise IDASyncError(error_str)
 
         call_stack.put((ff.__name__))
-        # Enable batch mode for all synchronized operations
+        # Enable batch mode on the IDA main thread to avoid interactive dialogs from MCP tools
         old_batch = idc.batch(1)
         try:
             res_container.put(ff())
         except Exception as x:
             res_container.put(x)
         finally:
+            # Restore batch mode state on the IDA main thread
             idc.batch(old_batch)
             call_stack.get()
 
@@ -94,7 +100,7 @@ def _normalize_timeout(value: object) -> float | None:
 def sync_wrapper(ff, timeout_override: float | None = None):
     """Wrapper to enable timeout and cancellation during IDA synchronization.
 
-    Note: Batch mode is now handled in _sync_wrapper to ensure it's always
+    Note: Batch mode is handled in _sync_wrapper to ensure it is always
     applied consistently for all synchronized operations.
     """
     # Capture cancel event from thread-local before execute_sync

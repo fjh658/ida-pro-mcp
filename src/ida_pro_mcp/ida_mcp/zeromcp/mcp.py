@@ -267,6 +267,8 @@ class McpServer:
         self.registry.methods["resources/list"] = self._mcp_resources_list
         self.registry.methods["resources/templates/list"] = self._mcp_resource_templates_list
         self.registry.methods["resources/read"] = self._mcp_resources_read
+        self.registry.methods["resources/subscribe"] = self._mcp_resources_subscribe
+        self.registry.methods["resources/unsubscribe"] = self._mcp_resources_unsubscribe
         self.registry.methods["prompts/list"] = self._mcp_prompts_list
         self.registry.methods["prompts/get"] = self._mcp_prompts_get
         self.registry.methods["notifications/cancelled"] = self._mcp_notifications_cancelled
@@ -393,12 +395,16 @@ class McpServer:
         return {
             "protocolVersion": getattr(self._protocol_version, "data", protocolVersion),
             "capabilities": {
-                "tools": {},
+                "tools": {
+                    "listChanged": True,  # Supports dynamic tool-list change notifications
+                },
                 "resources": {
                     "subscribe": False,
-                    "listChanged": False,
+                    "listChanged": True,  # Supports dynamic resource-list change notifications
                 },
-                "prompts": {},
+                "prompts": {
+                    "listChanged": True,  # Supports dynamic prompt-list change notifications
+                },
             },
             "serverInfo": {
                 "name": self.name,
@@ -569,6 +575,14 @@ class McpServer:
             "isError": True,
         }
 
+    def _mcp_resources_subscribe(self, uri: str, _meta: dict | None = None) -> dict:
+        """MCP resources/subscribe method - acknowledge subscription (no-op for static resources)"""
+        return {}
+
+    def _mcp_resources_unsubscribe(self, uri: str, _meta: dict | None = None) -> dict:
+        """MCP resources/unsubscribe method - acknowledge unsubscription (no-op for static resources)"""
+        return {}
+
     def _mcp_prompts_list(self, _meta: dict | None = None) -> dict:
         """MCP prompts/list method"""
         return {
@@ -721,26 +735,38 @@ class McpServer:
         return_type = hints.pop("return", None)
         sig = inspect.signature(func)
 
-        # Build parameter schema
-        properties = {}
-        required = []
+        # Allow wrappers to inject explicit input schema (e.g. parser-derived
+        # schemas for dynamically generated tools).
+        custom_input_schema = getattr(func, "__mcp_input_schema__", None)
+        if isinstance(custom_input_schema, dict):
+            input_schema = dict(custom_input_schema)
+            properties = input_schema.get("properties", {})
+            required = input_schema.get("required", [])
+            input_schema["properties"] = dict(properties) if isinstance(properties, dict) else {}
+            input_schema["required"] = list(required) if isinstance(required, list) else []
+        else:
+            # Build parameter schema from runtime annotations
+            properties = {}
+            required = []
 
-        for param_name, param_type in hints.items():
-            properties[param_name] = self._type_to_json_schema(param_type)
+            for param_name, param_type in hints.items():
+                properties[param_name] = self._type_to_json_schema(param_type)
 
-            # Add to required if no default value
-            param = sig.parameters.get(param_name)
-            if not param or param.default is inspect.Parameter.empty:
-                required.append(param_name)
+                # Add to required if no default value
+                param = sig.parameters.get(param_name)
+                if not param or param.default is inspect.Parameter.empty:
+                    required.append(param_name)
 
-        schema: dict[str, Any] = {
-            "name": func_name,
-            "description": (func.__doc__ or f"Call {func_name}").strip(),
-            "inputSchema": {
+            input_schema = {
                 "type": "object",
                 "properties": properties,
                 "required": required,
             }
+
+        schema: dict[str, Any] = {
+            "name": func_name,
+            "description": (func.__doc__ or f"Call {func_name}").strip(),
+            "inputSchema": input_schema,
         }
 
         # Add outputSchema if return type exists and is not None
