@@ -298,6 +298,31 @@ def _extract_instance_id(request: dict) -> Optional[str]:
     return arguments.pop("_instance", None)
 
 
+def _extract_resource_instance(request: dict) -> Optional[str]:
+    """Extract ?instance=xxx from resource URI and strip it before forwarding.
+
+    Returns the instance_id if found, None otherwise.
+    The instance query parameter is removed from the URI so IDA sees the clean URI.
+    """
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+    params = request.get("params", {})
+    if not isinstance(params, dict):
+        return None
+    uri = params.get("uri", "")
+    if not uri or "?" not in uri:
+        return None
+
+    parsed = urlparse(uri)
+    qs = parse_qs(parsed.query)
+    instance_id = qs.pop("instance", [None])[0]
+    if instance_id:
+        # Rebuild URI without the instance parameter
+        new_query = urlencode({k: v[0] for k, v in qs.items()}) if qs else ""
+        params["uri"] = urlunparse(parsed._replace(query=new_query))
+    return instance_id
+
+
 def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
     """Proxy dispatch, routes requests to IDA or handles locally"""
     if not isinstance(request, dict):
@@ -336,11 +361,35 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     if method == "resources/list":
         return dispatch_original(request)
     if method == "resources/templates/list":
-        return dispatch_original(request)
+        response = dispatch_original(request)
+        if response and "result" in response:
+            result = response["result"]
+            templates = result.get("resourceTemplates", [])
+            # Append {?instance} to existing templates (RFC 6570)
+            for t in templates:
+                uri = t.get("uriTemplate", "")
+                if "{?instance}" not in uri:
+                    t["uriTemplate"] = uri + "{?instance}"
+            # Add instance-aware templates for static resources
+            list_resp = dispatch_original(
+                {"jsonrpc": "2.0", "method": "resources/list", "id": None}
+            )
+            if list_resp and "result" in list_resp:
+                for res in list_resp["result"].get("resources", []):
+                    templates.append({
+                        "uriTemplate": res["uri"] + "{?instance}",
+                        "name": res["name"],
+                        "description": res.get("description", ""),
+                        "mimeType": res.get("mimeType", "application/json"),
+                    })
+            result["resourceTemplates"] = templates
+        return response
     if method == "resources/read":
         if not _broker().has_instances():
             return {"jsonrpc": "2.0", "result": {"contents": []}, "id": request.get("id")}
-        return route_to_ida(request)
+        # Extract optional ?instance=xxx from URI before forwarding (RFC 6570)
+        target_instance = _extract_resource_instance(request)
+        return route_to_ida(request, instance_id=target_instance)
     
     # prompts related
     if method in {"prompts/list", "prompts/get"}:

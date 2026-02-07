@@ -145,7 +145,7 @@ Analysis reports should include:
 
 - **Number conversion**: Always use the `int_convert` tool, never manually convert hex/dec
 - **Address format**: Use `0x` prefix for addresses
-- **Multi-instance**: Use `instance_list` to view connected IDAs, `instance_switch` to switch; or pass `_instance` parameter directly in any tool call to target a specific instance without switching
+- **Multi-instance**: Use `instance_list` to view connected IDAs, `instance_switch` to switch; or pass `_instance` parameter directly in any tool call to target a specific instance without switching. Resources also support `?instance=<id>` query parameter (e.g. `ida://idb/segments?instance=ida-86893`)
 - **Timeout handling**: Decompiling large functions may be slow, be patient
 - **Disasm vs Decompile**: Use `disasm` when decompilation fails, when exact instruction details matter, or for analyzing obfuscated code; use `decompile` for understanding high-level logic
 - **Call graph depth**: Use `callgraph` with appropriate `max_depth` to avoid overwhelming output; start shallow (depth 2-3) then drill deeper as needed

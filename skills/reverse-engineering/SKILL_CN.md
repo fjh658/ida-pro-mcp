@@ -145,7 +145,7 @@ find_bytes - 搜索带通配符的字节模式（如 "48 8B ?? ?? 89"）
 
 - **数字转换**：永远使用 `int_convert` 工具，不要手动转换hex/dec
 - **地址格式**：使用 `0x` 前缀表示地址
-- **多实例**：用 `instance_list` 查看已连接的IDA，`instance_switch` 切换；也可在任意工具调用中传入 `_instance` 参数直接指定目标实例，无需切换
+- **多实例**：用 `instance_list` 查看已连接的IDA，`instance_switch` 切换；也可在任意工具调用中传入 `_instance` 参数直接指定目标实例，无需切换。Resources 也支持 `?instance=<id>` 查询参数（如 `ida://idb/segments?instance=ida-86893`）
 - **超时处理**：大函数反编译可能较慢，耐心等待
 - **反汇编 vs 反编译**：反编译失败、需要精确指令细节或分析混淆代码时用 `disasm`；理解高层逻辑时用 `decompile`
 - **调用图深度**：使用 `callgraph` 时控制 `max_depth` 避免输出过多；先从浅层（2-3层）开始，按需深入

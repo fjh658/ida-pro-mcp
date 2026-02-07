@@ -42,6 +42,7 @@ class IDAInstance:
             result["endian"] = self.arch_info.get("endian", "")
             result["file_type"] = self.arch_info.get("file_type", "")
             result["base_addr"] = self.arch_info.get("base_addr", "")
+        result["connected_at"] = self.connected_at.isoformat()
         return result
 
 
