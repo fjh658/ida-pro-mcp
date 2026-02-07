@@ -12,6 +12,8 @@ import sys
 import json
 import argparse
 import inspect
+import socket
+import subprocess
 import threading
 import time
 from typing import Optional, BinaryIO
@@ -402,6 +404,43 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
 mcp.registry.dispatch = dispatch_proxy
 
 
+def _is_broker_alive(broker_url: str) -> bool:
+    """Check if broker is reachable by probing its TCP port."""
+    from urllib.parse import urlparse
+    parsed = urlparse(broker_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 13337
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _ensure_broker(broker_url: str, port: int):
+    """Auto-start broker if not already running."""
+    if _is_broker_alive(broker_url):
+        print("[MCP] Broker already running", file=sys.stderr)
+        return
+
+    print("[MCP] Broker not detected, auto-starting...", file=sys.stderr)
+    server_script = os.path.realpath(__file__)
+    subprocess.Popen(
+        [sys.executable, server_script, "--broker", "--port", str(port)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    # Wait for broker to become ready
+    for _ in range(20):
+        time.sleep(0.25)
+        if _is_broker_alive(broker_url):
+            print("[MCP] Broker auto-started on port", port, file=sys.stderr)
+            return
+    print("[MCP] WARNING: Broker failed to start within 5s", file=sys.stderr)
+
+
 def main():
     global HTTP_SERVER, _stdio_stdout, _broker_client
 
@@ -450,6 +489,8 @@ def main():
         return
 
     # MCP mode: do not start HTTP, requests go through Broker client
+    # Auto-start broker if not already running
+    _ensure_broker(args.broker_url, args.port)
     _broker_client = BrokerClient(args.broker_url, timeout=10.0)
 
     try:

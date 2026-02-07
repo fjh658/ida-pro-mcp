@@ -72,19 +72,23 @@ _Note_: You need to load a binary in IDA before the plugin menu will show up.
 
 ## Usage (Broker Mode)
 
+The Broker is **auto-started** when the MCP process launches. If no Broker is detected on `127.0.0.1:13337`, the MCP process will automatically fork one in the background — no manual steps required.
+
 ```bash
-# 1. Start Broker first (required for multi Cursor windows / multi IDA)
+# 1. Start Cursor / Claude Code — the MCP process auto-starts the Broker
+# 2. Open IDA, load binary, press Ctrl+Alt+M to connect
+```
+
+To start the Broker manually (e.g. on a custom port):
+
+```bash
 uv run ida-pro-mcp --broker
 # Or specify port: uv run ida-pro-mcp --broker --port 13337
-
-# 2. Start Cursor, MCP connects via stdio and requests the Broker above
-
-# 3. Open IDA, load binary, press Ctrl+Alt+M to connect (IDA connects to Broker's 13337 port)
 ```
 
 ### Architecture
 
-- **Broker**: Separate process, unique listener on `127.0.0.1:13337`, holds IDA instance registry; both IDA and MCP clients connect to it.
+- **Broker**: Listener on `127.0.0.1:13337`, holds IDA instance registry; both IDA and MCP clients connect to it. Auto-started by the first MCP process if not already running.
 - **MCP Process**: Started by Cursor per window (stdio), **does not bind port**, requests Broker via HTTP.
 - **IDA Plugin**: Connects to `127.0.0.1:13337` (Broker).
 
@@ -120,7 +124,7 @@ When analyzing multiple binaries simultaneously, just open multiple IDAs and pre
 | `--install` | Install IDA plugin and MCP client configuration |
 | `--uninstall` | Uninstall IDA plugin and MCP client configuration |
 | `--unsafe` | Enable unsafe tools (debugger related) |
-| `--broker` | **Start Broker only** (HTTP), no stdio; run separately for multi-window/multi-IDA |
+| `--broker` | **Start Broker only** (HTTP), no stdio; auto-started by MCP process, or run manually for custom setups |
 | `--broker-url URL` | Broker URL for MCP mode, default `http://127.0.0.1:13337` |
 | `--port PORT` | Broker mode listen port, default 13337 |
 | `--config` | Print MCP configuration info |
