@@ -26,6 +26,8 @@ from jsonrpc import JsonRpcRegistry
 
 class ToolSchemaRequiredTests(unittest.TestCase):
     def test_dynamic_wrapper_marks_only_true_required_fields(self):
+        # Regression guard: wrapper-injected broker routing arg `_instance`
+        # must stay optional, while true tool params follow parsed requiredness.
         tool_def = ToolDef(
             name="demo_tool",
             description="demo",
@@ -60,6 +62,8 @@ class ToolSchemaRequiredTests(unittest.TestCase):
         self.assertNotIn("include_total", required)
 
     def test_dynamic_wrapper_preserves_declared_param_types(self):
+        # Regression guard for the original Any->object type-loss bug:
+        # parser-declared union/list/int/bool must survive tools/list schema.
         tool_def = ToolDef(
             name="typed_demo_tool",
             description="typed demo",
@@ -94,6 +98,8 @@ class ToolSchemaRequiredTests(unittest.TestCase):
 
 class TypeParserTypedDictTests(unittest.TestCase):
     def test_typeddict_is_expanded_for_union_and_list(self):
+        # Ensure TypedDict symbols are expanded into structured object schemas
+        # both as single values and inside list/union branches.
         schema = type_str_to_json_schema("list[MemoryRead] | MemoryRead")
         self.assertIn("anyOf", schema)
 
@@ -112,6 +118,8 @@ class TypeParserTypedDictTests(unittest.TestCase):
         self.assertEqual(set(items_schema.get("required", [])), {"addr", "size"})
 
     def test_typeddict_total_false_keeps_fields_optional(self):
+        # total=False TypedDict fields are optional by definition and should not
+        # be emitted as schema-level required properties.
         schema = type_str_to_json_schema("ListQuery")
         self.assertEqual(schema["type"], "object")
         self.assertEqual(set(schema["properties"].keys()), {"filter", "offset", "count"})

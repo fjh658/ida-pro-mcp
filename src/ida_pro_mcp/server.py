@@ -143,19 +143,28 @@ def _build_ida_tool_input_schema(tool_def: ToolDef) -> dict:
     This preserves parser-derived types (int/list/bool/...) instead of relying
     on runtime Any annotations, and injects broker-only `_instance` selector.
     """
+    # Build the "real" schema from static parser output. This path keeps
+    # declared API types (including nested unions/TypedDicts) intact.
     base_input_schema = tool_to_mcp_schema(tool_def)["inputSchema"]
     properties = dict(base_input_schema.get("properties", {}))
+
+    # `_instance` is a broker-side routing control and must not be forwarded to
+    # IDA tool handlers. We expose it in schema as optional string|null.
     properties["_instance"] = {
         "anyOf": [{"type": "string"}, {"type": "null"}],
         "description": "Target IDA instance ID (e.g. 'ida-86893'). If omitted, uses the current active instance.",
     }
 
+    # Ensure `_instance` is never marked as required, even if upstream schema
+    # were to include it accidentally.
     required = [
         key
         for key in base_input_schema.get("required", [])
         if key != "_instance"
     ]
 
+    # Return a defensive copy because McpServer schema generation mutates/copies
+    # sub-structures and we do not want shared references.
     input_schema = dict(base_input_schema)
     input_schema["type"] = "object"
     input_schema["properties"] = properties
@@ -179,10 +188,17 @@ def _create_ida_tool_wrapper(tool_def: ToolDef):
         OptionalType[str],
         "Target IDA instance ID (e.g. 'ida-86893'). If omitted, uses the current active instance."
     ]
+
+    # Runtime annotations are intentionally Any for dynamically generated
+    # wrappers. Real parameter typing is supplied by ``__mcp_input_schema__``
+    # so schema generation remains precise without constructing runtime Python
+    # typing objects from parser strings.
     for param in tool_def.params:
         annotations[param.name] = Annotated[AnyType, param.description]
     annotations["return"] = AnyType
-    # Prefer parser-derived schema in tools/list output to avoid Any->object loss.
+
+    # Prefer parser-derived schema in tools/list output to avoid Any->object
+    # degradation from runtime annotation inspection.
     wrapper.__mcp_input_schema__ = _build_ida_tool_input_schema(tool_def)
     wrapper.__annotations__ = annotations
 

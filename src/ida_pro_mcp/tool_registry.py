@@ -270,7 +270,13 @@ def _parse_typed_dicts_from_file(filepath: str) -> dict[str, TypedDictDef]:
 
 
 def _load_typed_dict_defs() -> dict[str, TypedDictDef]:
-    """Load TypedDict definitions from ida_mcp sources (AST-only)."""
+    """Load TypedDict definitions from ida_mcp sources (AST-only).
+
+    We intentionally parse source files instead of importing ida_mcp modules:
+    importing those modules outside IDA can fail (idaapi dependency) and would
+    also execute module-level side effects. The AST path keeps schema generation
+    deterministic and usable in non-IDA environments (tests, CI, MCP startup).
+    """
     global _TYPED_DICT_CACHE
     if _TYPED_DICT_CACHE is not None:
         return _TYPED_DICT_CACHE
@@ -480,7 +486,22 @@ def type_str_to_json_schema(
     typed_dict_defs: Optional[dict[str, TypedDictDef]] = None,
     stack: Optional[set[str]] = None,
 ) -> dict:
-    """Convert type string to JSON Schema."""
+    """Convert a parsed Python type string into JSON Schema.
+
+    Input examples:
+      - "int"
+      - "list[MemoryRead] | MemoryRead"
+      - "Optional[list[str]]"
+      - "Dict[str, ListQuery]"
+
+    Design notes:
+      - Keep unions explicit via ``anyOf`` so MCP clients can choose valid
+        structured argument forms instead of collapsing to a single "object".
+      - Expand known TypedDict names into full object schemas with field-level
+        required information, descriptions, and ``additionalProperties: false``.
+      - Use a conservative fallback ``{"type": "object"}`` for unknown complex
+        symbols so callers still get a valid schema object.
+    """
     t = type_str.strip()
     if not t:
         return {}
@@ -490,7 +511,8 @@ def type_str_to_json_schema(
     if stack is None:
         stack = set()
 
-    # Handle Union types at top-level (A | B | C)
+    # Handle top-level unions first (A | B | C) so nested branches are resolved
+    # independently and then merged into a single ``anyOf``.
     union_parts = _split_top_level(t, "|")
     if len(union_parts) > 1:
         schemas = [
@@ -505,7 +527,7 @@ def type_str_to_json_schema(
     base, inner = _split_generic(t)
     bname = _base_name(base)
 
-    # Optional[T]
+    # Optional[T] is encoded as ``T | null`` to preserve nullability in schema.
     if bname == "Optional" and inner is not None:
         schemas = _dedupe_schemas(
             [
@@ -517,11 +539,12 @@ def type_str_to_json_schema(
             return schemas[0]
         return {"anyOf": schemas}
 
-    # Required[T] / NotRequired[T] wrappers (field-level marker)
+    # Required[T] / NotRequired[T] are field-level metadata wrappers used in
+    # TypedDict definitions. For schema shape we unwrap and recurse into T.
     if bname in {"Required", "NotRequired"} and inner is not None:
         return type_str_to_json_schema(inner, typed_dict_defs=typed_dict_defs, stack=stack)
 
-    # list[T]
+    # list[T] -> JSON array with recursively resolved item schema.
     if bname in {"list", "List"} and inner is not None:
         return {
             "type": "array",
@@ -532,7 +555,9 @@ def type_str_to_json_schema(
             ),
         }
 
-    # dict[K, V]
+    # dict[K, V] -> JSON object. JSON Schema cannot express arbitrary key types
+    # from Python dict generics, so we preserve the value schema via
+    # ``additionalProperties`` and ignore K.
     if bname in {"dict", "Dict"} and inner is not None:
         generic_args = _split_top_level(inner, ",")
         value_type = generic_args[1] if len(generic_args) >= 2 else "Any"
@@ -545,7 +570,7 @@ def type_str_to_json_schema(
             ),
         }
 
-    # Literal[a, b, c]
+    # Literal[a, b, c] -> enum when all literal tokens can be parsed safely.
     if bname == "Literal" and inner is not None:
         values: list[Any] = []
         for token in _split_top_level(inner, ","):
@@ -569,7 +594,8 @@ def type_str_to_json_schema(
     if t in primitive_map:
         return primitive_map[t]
 
-    # Resolve TypedDict names (by unqualified class name)
+    # Resolve TypedDict names by unqualified class name. ``stack`` prevents
+    # infinite recursion for self-referential or cyclic type aliases.
     td_name = _base_name(base)
     td_def = typed_dict_defs.get(td_name)
     if td_def and td_name not in stack:
@@ -600,12 +626,19 @@ def type_str_to_json_schema(
             result["required"] = required
         return result
 
-    # Unknown complex type fallback
+    # Unknown complex type fallback. We keep this permissive to avoid producing
+    # invalid schemas when encountering symbols we cannot resolve statically.
     return {"type": "object"}
 
 
 def tool_to_mcp_schema(tool: ToolDef) -> dict:
-    """Convert ToolDef into MCP tool schema."""
+    """Convert ToolDef into an MCP-compatible tool schema object.
+
+    This function is intentionally parser-driven. It converts the static type
+    strings extracted from source into JSON Schema *before* runtime wrappers are
+    built. Downstream code can then reuse this schema to avoid Any-annotation
+    type loss in dynamically generated call wrappers.
+    """
     properties = {}
     required = []
 

@@ -735,17 +735,24 @@ class McpServer:
         return_type = hints.pop("return", None)
         sig = inspect.signature(func)
 
-        # Allow wrappers to inject explicit input schema (e.g. parser-derived
-        # schemas for dynamically generated tools).
+        # Prefer explicitly injected schema when available.
+        #
+        # Why: dynamically generated wrappers often annotate params as Any,
+        # which would collapse tool input types to generic "object". Wrapper
+        # authors can attach ``__mcp_input_schema__`` to preserve richer
+        # parser-derived typing (union branches, TypedDict expansion, defaults).
         custom_input_schema = getattr(func, "__mcp_input_schema__", None)
         if isinstance(custom_input_schema, dict):
             input_schema = dict(custom_input_schema)
             properties = input_schema.get("properties", {})
             required = input_schema.get("required", [])
+            # Normalize structure defensively so malformed injections do not
+            # break downstream MCP clients.
             input_schema["properties"] = dict(properties) if isinstance(properties, dict) else {}
             input_schema["required"] = list(required) if isinstance(required, list) else []
         else:
-            # Build parameter schema from runtime annotations
+            # Fallback path: build schema from runtime annotations.
+            # This works well for statically declared tools.
             properties = {}
             required = []
 
