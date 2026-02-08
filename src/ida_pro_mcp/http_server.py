@@ -628,7 +628,7 @@ class IDAHttpServer:
             print(f"[HTTP] Server started (multithreaded): http://127.0.0.1:{self.port}", file=sys.stderr)
             sys.stderr.flush()
         except OSError as e:
-            if e.errno == 48:  # Address already in use
+            if e.errno in (48, 98, 10048) or getattr(e, "winerror", None) == 10048:
                 print(f"[HTTP] Port {self.port} is already in use, skipping HTTP server startup", file=sys.stderr)
                 sys.stderr.flush()
             else:

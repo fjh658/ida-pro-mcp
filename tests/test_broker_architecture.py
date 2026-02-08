@@ -4,6 +4,7 @@ import threading
 import time
 import unittest
 from typing import TypedDict
+from unittest.mock import patch
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -14,6 +15,8 @@ ZEROMCP_DIR = SRC / "ida_pro_mcp" / "ida_mcp" / "zeromcp"
 if str(ZEROMCP_DIR) not in sys.path:
     sys.path.insert(0, str(ZEROMCP_DIR))
 
+import ida_pro_mcp.http_server as http_server_module
+import ida_pro_mcp.server as server_module
 from ida_pro_mcp.broker_client import BrokerClient
 from ida_pro_mcp.http_server import IDARegistry
 from ida_pro_mcp.server import _create_ida_tool_wrapper, mcp
@@ -207,6 +210,64 @@ class BrokerErrorMappingTests(unittest.TestCase):
         result = self._call_with_broker_payload(payload)
         self.assertEqual(result["result"]["legacy"], True)
         self.assertEqual(result["id"], 99)
+
+
+class DispatchProxyRoutingTests(unittest.TestCase):
+    def test_resources_subscribe_and_unsubscribe_stay_local(self):
+        class _FailBroker:
+            def has_instances(self):
+                raise AssertionError("broker should not be called for local resources subscription methods")
+
+        request_sub = {
+            "jsonrpc": "2.0",
+            "id": 101,
+            "method": "resources/subscribe",
+            "params": {"uri": "ida://meta/current"},
+        }
+        request_unsub = {
+            "jsonrpc": "2.0",
+            "id": 102,
+            "method": "resources/unsubscribe",
+            "params": {"uri": "ida://meta/current"},
+        }
+
+        with patch.object(server_module, "_broker_client", _FailBroker()):
+            sub_resp = server_module.dispatch_proxy(request_sub)
+            unsub_resp = server_module.dispatch_proxy(request_unsub)
+
+        self.assertEqual(sub_resp, {"jsonrpc": "2.0", "result": {}, "id": 101})
+        self.assertEqual(unsub_resp, {"jsonrpc": "2.0", "result": {}, "id": 102})
+
+    def test_ensure_broker_uses_port_from_broker_url(self):
+        with patch.object(server_module, "_is_broker_alive", side_effect=[False, True]):
+            with patch.object(server_module.subprocess, "Popen") as popen_mock:
+                with patch.object(server_module.time, "sleep", return_value=None):
+                    server_module._ensure_broker("http://127.0.0.1:18000", 13337)
+
+        self.assertTrue(popen_mock.called)
+        argv = popen_mock.call_args.args[0]
+        self.assertIn("--port", argv)
+        self.assertEqual(argv[argv.index("--port") + 1], "18000")
+
+
+class BrokerClientRobustnessTests(unittest.TestCase):
+    def test_request_handles_unexpected_os_errors(self):
+        client = BrokerClient()
+        request = {"jsonrpc": "2.0", "id": 1, "method": "tools/call"}
+
+        with patch("urllib.request.urlopen", side_effect=PermissionError("denied")):
+            response = client.send_request(request)
+
+        self.assertEqual(response["error"]["code"], -32003)
+        self.assertEqual(response["error"]["data"]["error_code"], "broker_unavailable")
+
+
+class HttpServerStartupTests(unittest.TestCase):
+    def test_port_in_use_errno_98_is_handled_gracefully(self):
+        server = http_server_module.IDAHttpServer(port=13337)
+        with patch.object(http_server_module, "ThreadedHTTPServer", side_effect=OSError(98, "in use")):
+            server.start()
+        self.assertFalse(server._running)
 
 
 class JsonRpcStrictTypeValidationTests(unittest.TestCase):

@@ -54,7 +54,7 @@ class BrokerClient:
             except Exception:
                 print(f"[MCP] Broker HTTP {e.code} {path}: {e}", file=sys.stderr)
                 return None
-        except (urllib.error.URLError, json.JSONDecodeError) as e:
+        except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError) as e:
             print(f"[MCP] Broker request failed {path}: {e}", file=sys.stderr)
             return None
 

@@ -362,6 +362,10 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     # resources related
     if method == "resources/list":
         return dispatch_original(request)
+    if method == "resources/subscribe":
+        return dispatch_original(request)
+    if method == "resources/unsubscribe":
+        return dispatch_original(request)
     if method == "resources/templates/list":
         response = dispatch_original(request)
         if response and "result" in response:
@@ -419,6 +423,11 @@ def _is_broker_alive(broker_url: str) -> bool:
 
 def _ensure_broker(broker_url: str, port: int):
     """Auto-start broker if not already running."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(broker_url)
+    broker_port = parsed.port or port
+
     if _is_broker_alive(broker_url):
         print("[MCP] Broker already running", file=sys.stderr)
         return
@@ -426,7 +435,7 @@ def _ensure_broker(broker_url: str, port: int):
     print("[MCP] Broker not detected, auto-starting...", file=sys.stderr)
     server_script = os.path.realpath(__file__)
     subprocess.Popen(
-        [sys.executable, server_script, "--broker", "--port", str(port)],
+        [sys.executable, server_script, "--broker", "--port", str(broker_port)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -436,7 +445,7 @@ def _ensure_broker(broker_url: str, port: int):
     for _ in range(20):
         time.sleep(0.25)
         if _is_broker_alive(broker_url):
-            print("[MCP] Broker auto-started on port", port, file=sys.stderr)
+            print("[MCP] Broker auto-started on port", broker_port, file=sys.stderr)
             return
     print("[MCP] WARNING: Broker failed to start within 5s", file=sys.stderr)
 
