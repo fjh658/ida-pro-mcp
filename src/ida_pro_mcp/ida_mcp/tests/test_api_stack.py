@@ -56,22 +56,21 @@ def test_stack_frame_no_function():
 # ============================================================================
 
 
-@test(skip=True)  # Skip by default as it modifies the database
-def test_declare_delete_stack():
+@test()
+def test_declare_delete_stack_roundtrip():
     """declare_stack and delete_stack work together"""
     fn_addr = get_any_function()
     if not fn_addr:
         return
 
-    # Try to declare a stack variable
-    result = declare_stack(
-        {"func": fn_addr, "name": "__test_var__", "offset": -8, "type": "int"}
-    )
-    assert_is_list(result, min_length=1)
-    r = result[0]
-    assert_has_keys(r, "func", "error")
-
-    # If declare succeeded, try to delete
-    if r.get("error") is None:
-        del_result = delete_stack({"func": fn_addr, "name": "__test_var__"})
-        assert_is_list(del_result, min_length=1)
+    try:
+        # Try to declare a stack variable
+        result = declare_stack(
+            {"func": fn_addr, "name": "__test_var__", "offset": -8, "type": "int"}
+        )
+        assert_is_list(result, min_length=1)
+        r = result[0]
+        assert_has_keys(r, "func")
+    finally:
+        # Always try to clean up, even if declare failed
+        delete_stack({"func": fn_addr, "name": "__test_var__"})

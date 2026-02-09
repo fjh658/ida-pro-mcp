@@ -258,6 +258,9 @@ _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://githu
 - `set_comments(items)`: Set comments at address(es) in both disassembly and decompiler views.
 - `patch_asm(items)`: Patch assembly instructions at address(es).
 - `declare_type(decls)`: Declare C type(s) in the local type library.
+- `define_func(items)`: Define function(s) at address(es). Optionally specify `end` for explicit bounds.
+- `define_code(items)`: Convert bytes to code instruction(s) at address(es).
+- `undefine(items)`: Undefine item(s) at address(es), converting back to raw bytes. Optionally specify `end` or `size`.
 
 ## Memory Reading Operations
 

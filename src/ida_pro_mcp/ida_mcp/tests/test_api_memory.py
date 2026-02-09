@@ -160,9 +160,9 @@ def test_get_global_value():
 # ============================================================================
 
 
-@test(skip=True)  # Skip by default as it modifies the database
-def test_patch():
-    """patch writes bytes to address"""
+@test()
+def test_patch_roundtrip():
+    """patch writes bytes and restores original"""
     seg = get_first_segment()
     if not seg:
         return
@@ -170,16 +170,18 @@ def test_patch():
     start_addr, _ = seg
     # Read original bytes first
     original = get_bytes({"addr": start_addr, "size": 4})
+    if not original or not original[0].get("hex"):
+        return
 
     try:
         result = patch({"addr": start_addr, "hex": "90909090"})
         assert_is_list(result, min_length=1)
         r = result[0]
-        assert_has_keys(r, "addr", "error")
+        assert_has_keys(r, "addr")
+        assert r.get("ok") is True or r.get("error") is None
     finally:
         # Restore original bytes
-        if original and original[0].get("hex"):
-            patch({"addr": start_addr, "hex": original[0]["hex"]})
+        patch({"addr": start_addr, "hex": original[0]["hex"]})
 
 
 @test()
