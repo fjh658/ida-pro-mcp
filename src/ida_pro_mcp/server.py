@@ -172,6 +172,55 @@ def _build_ida_tool_input_schema(tool_def: ToolDef) -> dict:
     return input_schema
 
 
+def _json_schema_to_runtime_annotation(schema: dict):
+    """Best-effort JSON Schema -> runtime annotation mapping.
+
+    Some MCP hosts incorrectly derive parameter types from Python annotations
+    instead of `tools/list` inputSchema. We keep parser-driven schema as source
+    of truth, but expose close-enough runtime hints for compatibility.
+    """
+    from typing import Any as AnyType
+
+    if not isinstance(schema, dict):
+        return AnyType
+
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list) and any_of:
+        union_type = None
+        for branch in any_of:
+            branch_type = _json_schema_to_runtime_annotation(branch)
+            if union_type is None:
+                union_type = branch_type
+            else:
+                try:
+                    union_type = union_type | branch_type
+                except TypeError:
+                    return AnyType
+        return union_type if union_type is not None else AnyType
+
+    schema_type = schema.get("type")
+    if schema_type == "integer":
+        return int
+    if schema_type == "number":
+        return float
+    if schema_type == "string":
+        return str
+    if schema_type == "boolean":
+        return bool
+    if schema_type == "null":
+        return type(None)
+    if schema_type == "array":
+        item_type = _json_schema_to_runtime_annotation(schema.get("items", {}))
+        try:
+            return list[item_type]
+        except TypeError:
+            return list
+    if schema_type == "object":
+        return dict
+
+    return AnyType
+
+
 def _create_ida_tool_wrapper(tool_def: ToolDef):
     """Create wrapper function for IDA tool"""
     from typing import Annotated, Any as AnyType, Optional as OptionalType
@@ -189,17 +238,18 @@ def _create_ida_tool_wrapper(tool_def: ToolDef):
         "Target IDA instance ID (e.g. 'ida-86893'). If omitted, uses the current active instance."
     ]
 
-    # Runtime annotations are intentionally Any for dynamically generated
-    # wrappers. Real parameter typing is supplied by ``__mcp_input_schema__``
-    # so schema generation remains precise without constructing runtime Python
-    # typing objects from parser strings.
+    input_schema = _build_ida_tool_input_schema(tool_def)
+    schema_props = input_schema.get("properties", {})
+
+    # Keep runtime hints aligned with parser-derived schema for hosts that
+    # inspect annotations directly (instead of tools/list inputSchema).
     for param in tool_def.params:
-        annotations[param.name] = Annotated[AnyType, param.description]
+        runtime_type = _json_schema_to_runtime_annotation(schema_props.get(param.name, {}))
+        annotations[param.name] = Annotated[runtime_type, param.description]
     annotations["return"] = AnyType
 
-    # Prefer parser-derived schema in tools/list output to avoid Any->object
-    # degradation from runtime annotation inspection.
-    wrapper.__mcp_input_schema__ = _build_ida_tool_input_schema(tool_def)
+    # tools/list uses this parser-derived schema as canonical source of truth.
+    wrapper.__mcp_input_schema__ = input_schema
     wrapper.__annotations__ = annotations
 
     # Build an explicit signature so optional parameters are not incorrectly
