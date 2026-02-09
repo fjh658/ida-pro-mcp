@@ -532,6 +532,11 @@ class IDARequestHandler(BaseHTTPRequestHandler):
             bits = inst.get("bitness", "")
             arch = f"{proc}/{bits}" if proc else "-"
             name = esc(inst.get('name', '') or '-')
+            connected_at = "-"
+            raw_connected_at = inst.get("connected_at")
+            if raw_connected_at:
+                # Display ISO timestamp in a compact, readable local form.
+                connected_at = esc(str(raw_connected_at).replace("T", " ").split(".", 1)[0])
             bpath = esc(inst.get('binary_path', ''))
             bpath_short = esc(inst.get('binary_path', '')[-50:]) or '-'
 
@@ -540,6 +545,7 @@ class IDARequestHandler(BaseHTTPRequestHandler):
                 <td><code>{iid}</code> {current}</td>
                 <td>{esc(inst.get('type', 'gui'))}</td>
                 <td>{name}</td>
+                <td>{connected_at}</td>
                 <td>{arch}</td>
                 <td title="{bpath}">{bpath_short}</td>
                 <td>
@@ -548,7 +554,7 @@ class IDARequestHandler(BaseHTTPRequestHandler):
             </tr>"""
 
         if not instances:
-            instance_rows = '<tr><td colspan="6" class="empty">No IDA instances connected. Start IDA and press Ctrl+Alt+M.</td></tr>'
+            instance_rows = '<tr><td colspan="7" class="empty">No IDA instances connected. Start IDA and press Ctrl+Alt+M.</td></tr>'
 
         html = f"""<!DOCTYPE html>
 <html><head>
@@ -575,7 +581,7 @@ code {{ background:var(--border); padding:.125rem .25rem; border-radius:3px; fon
 </head><body>
 <h1>IDA MCP Broker <span class="count">({len(instances)} instance{"s" if len(instances) != 1 else ""})</span></h1>
 <table>
-<thead><tr><th>Instance</th><th>Type</th><th>Name</th><th>Arch</th><th>Binary</th><th>Actions</th></tr></thead>
+<thead><tr><th>Instance</th><th>Type</th><th>Name</th><th>Registered</th><th>Arch</th><th>Binary</th><th>Actions</th></tr></thead>
 <tbody>{instance_rows}</tbody>
 </table>
 <div class="footer">
