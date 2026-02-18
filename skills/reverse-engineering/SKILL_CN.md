@@ -118,6 +118,14 @@ find_bytes - 搜索带通配符的字节模式（如 "48 8B ?? ?? 89"）
 - 位移操作密集 → 自定义算法
 - XOR循环 → 简单混淆
 
+## Swift 工作流
+
+Swift 相关细节下沉到 references，保持主文档轻量。
+
+- 主参考：`references/swift/swift-string-xref-repair.md`
+- 内置脚本：`scripts/swift_string_xref_repair.py`
+- 触发规则：若 Swift 字符串存在但 `xrefs_to` 缺失或明显不完整，走 Swift 专项流程。
+
 ## 输出格式
 
 分析报告应包含：
@@ -150,6 +158,16 @@ find_bytes - 搜索带通配符的字节模式（如 "48 8B ?? ?? 89"）
 - **反汇编 vs 反编译**：反编译失败、需要精确指令细节或分析混淆代码时用 `disasm`；理解高层逻辑时用 `decompile`
 - **调用图深度**：使用 `callgraph` 时控制 `max_depth` 避免输出过多；先从浅层（2-3层）开始，按需深入
 
+## 技能扩展布局
+
+为了后续扩展（Swift 元数据、ObjC Runtime、反调试、壳/解包）保持可维护性：
+
+- `SKILL_CN.md` 只保留触发规则和主流程。
+- 可复用自动化放在 `scripts/`。
+- 深入专题放在 `references/`（如 `references/swift/`、`references/objc/`、`references/macho/`）。
+- 新增能力按独立 workstream 添加，不把所有细节堆进主文档。
+- 共享脚本/文档中避免写入样本特定地址。
+
 ## 工具速查表
 
 | 类别 | 工具 |
@@ -172,3 +190,4 @@ find_bytes - 搜索带通配符的字节模式（如 "48 8B ?? ?? 89"）
 - `dbg_step_over` - 单步步过
 - `dbg_regs` - 查看寄存器
 - `dbg_read` - 读取内存
+- `py_eval` - 在 IDA 上下文执行 Python

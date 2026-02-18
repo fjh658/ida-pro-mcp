@@ -118,6 +118,14 @@ Identifying characteristics:
 - Heavy bit-shift operations -> Custom algorithm
 - XOR loops -> Simple obfuscation
 
+## Swift Workstreams
+
+Swift-specific details are intentionally split into references to keep this file lean.
+
+- Primary guide: `references/swift/swift-string-xref-repair.md`
+- Built-in helper script: `scripts/swift_string_xref_repair.py`
+- Trigger rule: if Swift strings exist but `xrefs_to` is missing/incomplete, use the Swift reference workflow.
+
 ## Output Format
 
 Analysis reports should include:
@@ -150,6 +158,16 @@ Analysis reports should include:
 - **Disasm vs Decompile**: Use `disasm` when decompilation fails, when exact instruction details matter, or for analyzing obfuscated code; use `decompile` for understanding high-level logic
 - **Call graph depth**: Use `callgraph` with appropriate `max_depth` to avoid overwhelming output; start shallow (depth 2-3) then drill deeper as needed
 
+## Skill Extension Layout
+
+Keep this skill modular and leave headroom for future capabilities.
+
+- Keep `SKILL.md` focused on high-level workflow and trigger rules.
+- Put reusable automation in `scripts/`.
+- Put deep topic notes in `references/` (for example `references/swift/`, `references/objc/`, `references/macho/`).
+- Add new sections as isolated workstreams (Swift metadata, ObjC runtime, anti-debug, packers) instead of expanding one monolithic section.
+- Keep sample-specific addresses out of shared scripts and docs.
+
 ## Tool Quick Reference
 
 | Category | Tools |
@@ -172,3 +190,4 @@ For dynamic debugging:
 - `dbg_step_over` - Step over
 - `dbg_regs` - View registers
 - `dbg_read` - Read memory
+- `py_eval` - Execute Python in IDA context
