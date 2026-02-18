@@ -5,7 +5,6 @@ including reading, creating, and deleting stack variables in functions.
 """
 
 from typing import Annotated
-import ida_typeinf
 import ida_frame
 import idaapi
 
@@ -19,6 +18,11 @@ from .utils import (
     StackVarDecl,
     StackVarDelete,
     get_stack_frame_variables_internal,
+    has_func_frame,
+    get_frame_member_info,
+    is_special_frame_member_compat,
+    delete_frame_member_compat,
+    define_stkvar_compat,
 )
 
 
@@ -53,6 +57,7 @@ def declare_stack(
     """Create stack vars"""
     items = normalize_dict_list(items)
     results = []
+
     for item in items:
         fn_addr = item.get("addr", "")
         offset = item.get("offset", "")
@@ -68,16 +73,14 @@ def declare_stack(
                 continue
 
             ea = parse_address(offset)
-
-            frame_tif = ida_typeinf.tinfo_t()
-            if not ida_frame.get_func_frame(frame_tif, func):
+            if not has_func_frame(func):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "No frame returned"}
                 )
                 continue
 
             tif = get_type_by_name(type_name)
-            if not ida_frame.define_stkvar(func, var_name, ea, tif):
+            if not define_stkvar_compat(func, var_name, ea, tif):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "Failed to define"}
                 )
@@ -99,6 +102,7 @@ def delete_stack(
 
     items = normalize_dict_list(items)
     results = []
+
     for item in items:
         fn_addr = item.get("addr", "")
         var_name = item.get("name", "")
@@ -111,15 +115,8 @@ def delete_stack(
                 )
                 continue
 
-            frame_tif = ida_typeinf.tinfo_t()
-            if not ida_frame.get_func_frame(frame_tif, func):
-                results.append(
-                    {"addr": fn_addr, "name": var_name, "error": "No frame returned"}
-                )
-                continue
-
-            idx, udm = frame_tif.get_udm(var_name)
-            if not udm:
+            member_info = get_frame_member_info(func, var_name)
+            if not member_info:
                 results.append(
                     {
                         "addr": fn_addr,
@@ -129,8 +126,8 @@ def delete_stack(
                 )
                 continue
 
-            tid = frame_tif.get_udm_tid(idx)
-            if ida_frame.is_special_frame_member(tid):
+            tid = int(member_info["tid"])
+            if is_special_frame_member_compat(tid):
                 results.append(
                     {
                         "addr": fn_addr,
@@ -140,10 +137,8 @@ def delete_stack(
                 )
                 continue
 
-            udm = ida_typeinf.udm_t()
-            frame_tif.get_udm_by_tid(udm, tid)
-            offset = udm.offset // 8
-            size = udm.size // 8
+            offset = int(member_info["offset"])
+            size = int(member_info["size"])
             if ida_frame.is_funcarg_off(func, offset):
                 results.append(
                     {
@@ -154,7 +149,7 @@ def delete_stack(
                 )
                 continue
 
-            if not ida_frame.delete_frame_members(func, offset, offset + size):
+            if not delete_frame_member_compat(func, offset, size):
                 results.append(
                     {"addr": fn_addr, "name": var_name, "error": "Failed to delete"}
                 )

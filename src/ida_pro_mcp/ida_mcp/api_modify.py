@@ -15,6 +15,10 @@ from .utils import (
     parse_address,
     decompile_checked,
     refresh_decompiler_ctext,
+    has_func_frame,
+    get_frame_member_info,
+    is_special_frame_member_compat,
+    define_stkvar_compat,
     CommentOp,
     AsmPatchOp,
     FunctionRename,
@@ -319,8 +323,7 @@ def rename(batch: RenameBatch) -> dict:
                     )
                     continue
 
-                frame_tif = ida_typeinf.tinfo_t()
-                if not ida_frame.get_func_frame(frame_tif, func):
+                if not has_func_frame(func):
                     results.append(
                         {
                             "func_addr": item["func_addr"],
@@ -332,8 +335,8 @@ def rename(batch: RenameBatch) -> dict:
                     )
                     continue
 
-                idx, udm = frame_tif.get_udm(item["old"])
-                if not udm:
+                member_info = get_frame_member_info(func, item["old"])
+                if not member_info:
                     results.append(
                         {
                             "func_addr": item["func_addr"],
@@ -345,8 +348,8 @@ def rename(batch: RenameBatch) -> dict:
                     )
                     continue
 
-                tid = frame_tif.get_udm_tid(idx)
-                if ida_frame.is_special_frame_member(tid):
+                tid = int(member_info["tid"])
+                if is_special_frame_member_compat(tid):
                     results.append(
                         {
                             "func_addr": item["func_addr"],
@@ -358,9 +361,7 @@ def rename(batch: RenameBatch) -> dict:
                     )
                     continue
 
-                udm = ida_typeinf.udm_t()
-                frame_tif.get_udm_by_tid(udm, tid)
-                offset = udm.offset // 8
+                offset = int(member_info["offset"])
                 if ida_frame.is_funcarg_off(func, offset):
                     results.append(
                         {
@@ -374,7 +375,20 @@ def rename(batch: RenameBatch) -> dict:
                     continue
 
                 sval = ida_frame.soff_to_fpoff(func, offset)
-                success = ida_frame.define_stkvar(func, item["new"], sval, udm.type)
+                member_tif = member_info.get("tif")
+                if member_tif is None:
+                    results.append(
+                        {
+                            "func_addr": item["func_addr"],
+                            "old": item["old"],
+                            "new": item["new"],
+                            "ok": False,
+                            "error": "Failed to read member type",
+                        }
+                    )
+                    continue
+
+                success = define_stkvar_compat(func, item["new"], sval, member_tif)
                 results.append(
                     {
                         "func_addr": item["func_addr"],

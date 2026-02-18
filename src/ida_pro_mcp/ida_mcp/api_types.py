@@ -4,12 +4,11 @@ import ida_typeinf
 import ida_hexrays
 import ida_nalt
 import ida_bytes
-import ida_frame
 import ida_ida
 import idaapi
 
 from .rpc import tool
-from .sync import idasync, ida_major
+from .sync import idasync
 from .utils import (
     normalize_list_input,
     normalize_dict_list,
@@ -18,6 +17,9 @@ from .utils import (
     get_type_ordinal_limit,
     parse_decls_ctypes,
     my_modifier_t,
+    has_func_frame,
+    get_frame_member_info,
+    set_frame_member_type_compat,
     StructRead,
     TypeEdit,
 )
@@ -161,11 +163,10 @@ def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
                 member_addr = addr + offset
                 try:
                     if member.type.is_ptr():
-                        is_64bit = (
-                            ida_ida.inf_is_64bit()
-                            if ida_major >= 9
-                            else idaapi.get_inf_structure().is_64bit()
-                        )
+                        if hasattr(ida_ida, "inf_is_64bit"):
+                            is_64bit = ida_ida.inf_is_64bit()
+                        else:
+                            is_64bit = idaapi.get_inf_structure().is_64bit()
                         if is_64bit:
                             value = idaapi.get_qword(member_addr)
                             value_str = f"0x{value:016X}"
@@ -366,23 +367,18 @@ def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
                     results.append({"edit": edit, "error": "No function found"})
                     continue
 
-                frame_tif = ida_typeinf.tinfo_t()
-                if not ida_frame.get_func_frame(frame_tif, func):
+                if not has_func_frame(func):
                     results.append({"edit": edit, "error": "No frame"})
                     continue
 
-                idx, udm = frame_tif.get_udm(edit["name"])
-                if not udm:
+                member_info = get_frame_member_info(func, edit["name"])
+                if not member_info:
                     results.append({"edit": edit, "error": f"{edit['name']} not found"})
                     continue
 
-                tid = frame_tif.get_udm_tid(idx)
-                udm = ida_typeinf.udm_t()
-                frame_tif.get_udm_by_tid(udm, tid)
-                offset = udm.offset // 8
-
+                offset = int(member_info["offset"])
                 tif = get_type_by_name(edit["ty"])
-                success = ida_frame.set_frame_member_type(func, offset, tif)
+                success = set_frame_member_type_compat(func, offset, tif)
                 results.append(
                     {
                         "edit": edit,
@@ -415,7 +411,7 @@ def infer_types(
             tif = ida_typeinf.tinfo_t()
 
             # Try Hex-Rays inference
-            if ida_hexrays.init_hexrays_plugin() and ida_hexrays.guess_tinfo(tif, ea):
+            if ida_hexrays.init_hexrays_plugin() and ida_typeinf.guess_tinfo(tif, ea):
                 results.append(
                     {
                         "addr": addr,

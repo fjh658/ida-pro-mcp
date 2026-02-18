@@ -19,13 +19,20 @@ from typing import (
 )
 
 import ida_funcs
+import ida_frame
 import ida_hexrays
 import ida_kernwin
 import ida_nalt
 import ida_typeinf
+import ida_bytes
 import idaapi
 import idautils
 import idc
+
+try:
+    import ida_struct
+except Exception:
+    ida_struct = None
 
 from .sync import IDAError
 
@@ -836,20 +843,50 @@ def parse_decls_ctypes(decls: str, hti_flags: int) -> tuple[int, list[str]]:
 def get_stack_frame_variables_internal(
     fn_addr: int, raise_error: bool
 ) -> list[StackFrameVariable]:
-    from .sync import ida_major
-
-    if ida_major < 9:
-        return []
-
     func = idaapi.get_func(fn_addr)
     if not func:
         if raise_error:
             raise IDAError(f"No function found at address {fn_addr}")
         return []
 
-    tif = ida_typeinf.tinfo_t()
-    if not tif.get_type_by_tid(func.frame) or not tif.is_udt():
-        return []
+    tif = get_frame_tinfo(func)
+    if not tif:
+        if ida_struct is None or not hasattr(ida_frame, "get_frame"):
+            return []
+        try:
+            frame = ida_frame.get_frame(func)
+            if frame is None:
+                return []
+            members: list[StackFrameVariable] = []
+            for i in range(int(frame.memqty)):
+                member = frame.get_member(i)
+                if member is None:
+                    continue
+                mid = int(member.id)
+                if is_special_frame_member_compat(mid):
+                    continue
+                name = ida_struct.get_member_name(mid)
+                if not name:
+                    continue
+                offset = int(member.soff)
+                size = int(ida_struct.get_member_size(member))
+                mtif = ida_typeinf.tinfo_t()
+                member_type = ""
+                if hasattr(ida_struct, "get_member_tinfo") and ida_struct.get_member_tinfo(
+                    mtif, member
+                ):
+                    member_type = str(mtif)
+                members.append(
+                    StackFrameVariable(
+                        name=name,
+                        offset=hex(offset),
+                        size=hex(max(size, 0)),
+                        type=member_type,
+                    )
+                )
+            return members
+        except Exception:
+            return []
 
     members: list[StackFrameVariable] = []
     udt = ida_typeinf.udt_type_data_t()
@@ -866,6 +903,193 @@ def get_stack_frame_variables_internal(
                 )
             )
     return members
+
+
+def get_frame_tinfo(func) -> ida_typeinf.tinfo_t | None:
+    """Get frame type info for a function across IDA versions."""
+    tif = ida_typeinf.tinfo_t()
+    try:
+        frame_tid = getattr(func, "frame", idaapi.BADADDR)
+        if frame_tid != idaapi.BADADDR and tif.get_type_by_tid(frame_tid) and tif.is_udt():
+            return tif
+    except Exception:
+        pass
+
+    if hasattr(ida_frame, "get_func_frame"):
+        tif = ida_typeinf.tinfo_t()
+        try:
+            if ida_frame.get_func_frame(tif, func) and tif.is_udt():
+                return tif
+        except Exception:
+            pass
+
+    return None
+
+
+def has_func_frame(func) -> bool:
+    if get_frame_tinfo(func) is not None:
+        return True
+    if hasattr(ida_frame, "get_frame"):
+        try:
+            return ida_frame.get_frame(func) is not None
+        except Exception:
+            return False
+    return False
+
+
+def get_frame_member_info(func, member_name: str) -> dict | None:
+    """Get frame member info by name.
+
+    Returns dict with: tid, offset(bytes), size(bytes), tif (optional tinfo_t)
+    """
+    frame_tif = get_frame_tinfo(func)
+    if frame_tif is not None:
+        try:
+            idx = frame_tif.find_udm(member_name)
+            if idx >= 0:
+                tid = frame_tif.get_udm_tid(idx)
+                udm = ida_typeinf.udm_t()
+                if frame_tif.get_udm_by_tid(udm, tid) >= 0:
+                    return {
+                        "tid": tid,
+                        "offset": udm.offset // 8,
+                        "size": max(udm.size // 8, 1),
+                        "tif": udm.type,
+                    }
+        except Exception:
+            pass
+
+    if ida_struct is not None and hasattr(ida_frame, "get_frame"):
+        try:
+            frame = ida_frame.get_frame(func)
+            if frame is None:
+                return None
+            member = ida_struct.get_member_by_name(frame, member_name)
+            if member is None:
+                return None
+            offset = int(member.soff)
+            size = int(ida_struct.get_member_size(member))
+            tid = int(member.id)
+            mtif = ida_typeinf.tinfo_t()
+            tif = None
+            if hasattr(ida_struct, "get_member_tinfo") and ida_struct.get_member_tinfo(
+                mtif, member
+            ):
+                tif = mtif
+            return {"tid": tid, "offset": offset, "size": max(size, 1), "tif": tif}
+        except Exception:
+            return None
+
+    return None
+
+
+def is_special_frame_member_compat(tid: int) -> bool:
+    if hasattr(ida_frame, "is_special_frame_member"):
+        try:
+            return bool(ida_frame.is_special_frame_member(tid))
+        except Exception:
+            return False
+    if ida_struct is not None and hasattr(ida_struct, "is_special_member"):
+        try:
+            return bool(ida_struct.is_special_member(tid))
+        except Exception:
+            return False
+    return False
+
+
+def delete_frame_member_compat(func, offset: int, size: int) -> bool:
+    if hasattr(ida_frame, "delete_frame_members"):
+        try:
+            return bool(ida_frame.delete_frame_members(func, offset, offset + size))
+        except Exception:
+            pass
+
+    if ida_struct is not None and hasattr(ida_frame, "get_frame"):
+        try:
+            frame = ida_frame.get_frame(func)
+            if frame is None:
+                return False
+            if hasattr(ida_struct, "del_struc_member") and ida_struct.del_struc_member(
+                frame, offset
+            ):
+                return True
+            if hasattr(ida_struct, "del_struc_members"):
+                return ida_struct.del_struc_members(frame, offset, offset + size) >= 0
+        except Exception:
+            return False
+
+    return False
+
+
+def define_stkvar_compat(func, name: str, off: int, tif: ida_typeinf.tinfo_t) -> bool:
+    """Define/rename stack variable across IDA versions."""
+    # IDA 8.5+/9.x
+    if hasattr(ida_frame, "set_frame_member_type"):
+        try:
+            return bool(ida_frame.define_stkvar(func, name, off, tif))
+        except Exception:
+            return False
+
+    # IDA 8.4 fallback: define_stkvar(func, name, off, flags, ti, nbytes)
+    if ida_struct is None:
+        return False
+    try:
+        size = int(tif.get_size())
+    except Exception:
+        size = 1
+    if size <= 0:
+        size = 1
+
+    try:
+        if not ida_frame.define_stkvar(func, name, off, ida_bytes.byte_flag(), None, size):
+            return False
+    except Exception:
+        return False
+
+    try:
+        frame = ida_frame.get_frame(func)
+        if frame is None:
+            return True
+        member = ida_struct.get_member_by_name(frame, name)
+        if member is None:
+            return True
+        flags = getattr(ida_struct, "SET_MEMTI_COMPATIBLE", 0)
+        code = ida_struct.set_member_tinfo(frame, member, 0, tif, flags)
+        ok_codes = {
+            getattr(ida_struct, "SMT_OK", -1),
+            getattr(ida_struct, "SMT_KEEP", -2),
+        }
+        return code in ok_codes
+    except Exception:
+        return True
+
+
+def set_frame_member_type_compat(func, offset: int, tif: ida_typeinf.tinfo_t) -> bool:
+    if hasattr(ida_frame, "set_frame_member_type"):
+        try:
+            return bool(ida_frame.set_frame_member_type(func, offset, tif))
+        except Exception:
+            pass
+
+    if ida_struct is not None and hasattr(ida_frame, "get_frame"):
+        try:
+            frame = ida_frame.get_frame(func)
+            if frame is None:
+                return False
+            member = ida_struct.get_member(frame, offset)
+            if member is None:
+                return False
+            flags = getattr(ida_struct, "SET_MEMTI_COMPATIBLE", 0)
+            code = ida_struct.set_member_tinfo(frame, member, 0, tif, flags)
+            ok_codes = {
+                getattr(ida_struct, "SMT_OK", -1),
+                getattr(ida_struct, "SMT_KEEP", -2),
+            }
+            return code in ok_codes
+        except Exception:
+            return False
+
+    return False
 
 
 def decompile_checked(addr: int):
