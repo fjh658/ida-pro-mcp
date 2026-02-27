@@ -22,12 +22,12 @@ from typing import Optional, BinaryIO
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 if __name__ == "__main__" or __package__ is None:
     sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
-    from ida_pro_mcp.http_server import IDAHttpServer, REGISTRY
+    from ida_pro_mcp.http_server import IDAHttpServer, REGISTRY, set_tool_defs
     from ida_pro_mcp.tool_registry import parse_all_api_files, tool_to_mcp_schema, ToolDef
     from ida_pro_mcp.install import install_ida_plugin, install_mcp_servers, print_mcp_config
     from ida_pro_mcp.broker_client import BrokerClient
 else:
-    from .http_server import IDAHttpServer, REGISTRY
+    from .http_server import IDAHttpServer, REGISTRY, set_tool_defs
     from .tool_registry import parse_all_api_files, tool_to_mcp_schema, ToolDef
     from .install import install_ida_plugin, install_mcp_servers, print_mcp_config
     from .broker_client import BrokerClient
@@ -414,10 +414,20 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
 
         return dispatch_original(request)
     
-    # tools/list - return all tools
+    # tools/list - return all tools, filtered by broker config
     if method == "tools/list":
         response = dispatch_original(request)
         tools = response.get("result", {}).get("tools", []) if response else []
+        # Filter out tools disabled in broker config
+        try:
+            config = _broker().get_config()
+            if config and "enabled_tools" in config:
+                enabled = config["enabled_tools"]
+                tools = [t for t in tools if enabled.get(t.get("name", ""), True)]
+                if response and "result" in response:
+                    response["result"]["tools"] = tools
+        except Exception:
+            pass  # If config query fails, return all tools
         current = _broker().get_current()
         if current and not current.get("error"):
             print(f"[MCP] tools/list: {len(tools)} tools (IDA: {current.get('name', '')})", file=sys.stderr)
@@ -533,6 +543,12 @@ def main():
     # Register tools
     _register_ida_tools(enable_unsafe=args.unsafe)
     _register_ida_resources()
+
+    # Provide tool definitions to HTTP server for config page
+    set_tool_defs([
+        {"name": t.name, "description": t.description, "is_unsafe": t.is_unsafe}
+        for t in _IDA_TOOLS
+    ])
 
     if args.install:
         install_ida_plugin(allow_ida_free=args.allow_ida_free)

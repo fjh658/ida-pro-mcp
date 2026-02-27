@@ -119,6 +119,10 @@ class BrokerClient:
         }
         return jsonrpc_error(code_map.get(error_code, -32003), message, error_code)
 
+    def get_config(self) -> Optional[dict]:
+        """GET /api/config - Get broker configuration (CORS, enabled tools)."""
+        return self._request("GET", "/api/config")
+
     def has_instances(self) -> bool:
         """Return whether any instances are connected (cached for 2s)."""
         now = time.monotonic()
