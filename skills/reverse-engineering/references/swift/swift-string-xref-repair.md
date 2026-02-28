@@ -57,7 +57,8 @@ typedef struct {
 
 ## Scripted Helper
 
-Use `scripts/swift_string_xref_repair.py` through `py_eval`.
+Use `scripts/swift_string_xref_repair.py` via IDA Script File or MCP `py_eval`.
+When using `py_eval`, read the script content first and pass the full code to `exec()`.
 
 Default behavior (no hardcoded addresses):
 - discovery root: current cursor function.

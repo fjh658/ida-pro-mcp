@@ -23,5 +23,8 @@ venv*/
 *.til
 *.elf
 
+# macOS
+.DS_Store
+
 # Generated server files
 server_generated.py

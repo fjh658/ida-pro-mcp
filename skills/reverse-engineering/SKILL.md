@@ -118,6 +118,20 @@ Identifying characteristics:
 - Heavy bit-shift operations -> Custom algorithm
 - XOR loops -> Simple obfuscation
 
+## Computed-Branch Deobfuscation Workstream
+
+Handles computed indirect jumps (`JMP reg` / `BR Xn`) that produce `JUMPOUT(...)` in decompiled output, commonly seen in SDK-level obfuscation schemes.
+
+- Primary guide: `references/computed-branch/computed-branch-deobfuscation.md`
+- Built-in script: `scripts/computed_branch_deobf.py`
+- Trigger rules:
+  - Decompiled pseudocode contains `JUMPOUT(...)`.
+  - Disassembly shows indirect jumps preceded by arithmetic chains computing the target.
+  - Binary uses computed-branch obfuscation (e.g. register-indirect jumps with constant folding patterns).
+- Action: Load the script via `py_eval` to auto-resolve all computed branches (installs Hex-Rays microcode optimizer, patches binary, rebuilds functions). Fix All runs six phases: microcode analysis → binary patching → deferred IDB fixups → tiny-prologue extension → standalone opaque predicate cleaning → boundary repair. Completes in ~10 seconds for ~490 functions with cooperative timeout (3s per function) and distance validation (±64KB).
+- Results: ARM64 achieves 0 JUMPOUT (~550 functions). x86_64 reduces to 8 residual JUMPOUTs (~490 functions) — hard cases requiring enhanced propagation.
+- For deeper microcode work, read the IDAPython sub-skills (see below).
+
 ## Swift Workstreams
 
 Swift-specific details are intentionally split into references to keep this file lean.
@@ -158,14 +172,31 @@ Analysis reports should include:
 - **Disasm vs Decompile**: Use `disasm` when decompilation fails, when exact instruction details matter, or for analyzing obfuscated code; use `decompile` for understanding high-level logic
 - **Call graph depth**: Use `callgraph` with appropriate `max_depth` to avoid overwhelming output; start shallow (depth 2-3) then drill deeper as needed
 
+## IDAPython Development Sub-Skills
+
+When analysis requires writing or modifying IDAPython scripts/plugins (not just using MCP tools), read the sub-skills:
+
+- **`idapython/SKILL.md`** — IDAPython module map, plugin architecture (`plugin_t`, `action_handler_t`), API safety rules, architecture detection, instruction decoding best practices, 50+ module API docs.
+- **`idapython/microcode/SKILL.md`** — Hex-Rays microcode API deep-dive: `mba_t`, `mblock_t`, `minsn_t`, `mop_t`, writing `optblock_t`/`optinsn_t` optimizers, `microcode_filter_t`, all mcode opcodes.
+- Trigger rule: if the task involves writing IDAPython code, developing plugins, or working with Hex-Rays microcode internals, read the relevant sub-skill before proceeding.
+
+Reference files available under `idapython/`:
+- `idapython/references/api_safety.md` — Threading constraints, optimizer callback safety, deferred execution patterns.
+- `idapython/references/ida_allins_common.md` — Common `ida_allins` instruction constants (x86/ARM64).
+- `idapython/microcode/references/constant_propagation.md` — PropState engine implementation.
+- `idapython/microcode/references/deobfuscation_patterns.md` — Obfuscation pattern catalog and solutions.
+- `idapython/microcode/references/maturity_levels.md` — MMAT_* pipeline stages.
+- `idapython/microcode/references/mcode_opcodes.md` — Complete mcode_t opcode table.
+
 ## Skill Extension Layout
 
 Keep this skill modular and leave headroom for future capabilities.
 
 - Keep `SKILL.md` focused on high-level workflow and trigger rules.
 - Put reusable automation in `scripts/`.
-- Put deep topic notes in `references/` (for example `references/swift/`, `references/objc/`, `references/macho/`).
-- Add new sections as isolated workstreams (Swift metadata, ObjC runtime, anti-debug, packers) instead of expanding one monolithic section.
+- Put deep topic notes in `references/` (for example `references/swift/`, `references/objc/`, `references/computed-branch/`).
+- IDAPython development knowledge lives in `idapython/` (sub-skill: plugin development, microcode API, 50+ module docs).
+- Add new sections as isolated workstreams (Swift metadata, ObjC runtime, anti-debug, packers, deobfuscation) instead of expanding one monolithic section.
 - Keep sample-specific addresses out of shared scripts and docs.
 
 ## Tool Quick Reference

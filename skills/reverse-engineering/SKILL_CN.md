@@ -118,6 +118,20 @@ find_bytes - 搜索带通配符的字节模式（如 "48 8B ?? ?? 89"）
 - 位移操作密集 → 自定义算法
 - XOR循环 → 简单混淆
 
+## 计算跳转去混淆工作流
+
+处理计算间接跳转（x86_64 `JMP reg` / ARM64 `BR Xn`）导致反编译出现 `JUMPOUT(...)` 的问题，常见于 SDK 级混淆方案。
+
+- 主参考：`references/computed-branch/computed-branch-deobfuscation.md`
+- 内置脚本：`scripts/computed_branch_deobf.py`
+- 触发规则：
+  - 反编译伪代码中出现 `JUMPOUT(...)`。
+  - 反汇编中出现间接跳转，前面有算术链计算目标地址。
+  - 二进制使用计算跳转混淆（如寄存器间接跳转 + 常量折叠模式）。
+- 处理方式：通过 `py_eval` 加载脚本，自动解析所有计算跳转（安装 Hex-Rays 微码优化器，补丁二进制，重建函数）。Fix All 执行六个阶段：微码分析 → 二进制补丁 → 延迟 IDB 修复 → 小函数扩展 → 独立不透明谓词清理 → 边界修复。全量扫描约 490 个函数耗时 ~10 秒，含协作式超时（每函数 3 秒）和距离校验（±64KB）。
+- 效果：ARM64 实现 0 JUMPOUT（约 550 个函数）。x86_64 降至 8 个残余 JUMPOUT（约 490 个函数）——需增强传播引擎处理的硬案例。
+- 需要更深入的微码工作时，参阅下方 IDAPython 子技能。
+
 ## Swift 工作流
 
 Swift 相关细节下沉到 references，保持主文档轻量。
@@ -158,13 +172,30 @@ Swift 相关细节下沉到 references，保持主文档轻量。
 - **反汇编 vs 反编译**：反编译失败、需要精确指令细节或分析混淆代码时用 `disasm`；理解高层逻辑时用 `decompile`
 - **调用图深度**：使用 `callgraph` 时控制 `max_depth` 避免输出过多；先从浅层（2-3层）开始，按需深入
 
+## IDAPython 开发子技能
+
+当分析需要编写或修改 IDAPython 脚本/插件（不仅仅是使用 MCP 工具）时，参阅子技能：
+
+- **`idapython/SKILL.md`** — IDAPython 模块一览、插件架构（`plugin_t`、`action_handler_t`）、API 安全规则、架构检测、指令解码最佳实践，50+ 模块 API 文档。
+- **`idapython/microcode/SKILL.md`** — Hex-Rays 微码 API 深度参考：`mba_t`、`mblock_t`、`minsn_t`、`mop_t`，编写 `optblock_t`/`optinsn_t` 优化器，`microcode_filter_t`，全部 mcode 操作码。
+- 触发规则：如果任务涉及编写 IDAPython 代码、开发插件或操作 Hex-Rays 微码内部结构，先读取相关子技能再动手。
+
+`idapython/` 下可用的参考文件：
+- `idapython/references/api_safety.md` — 线程约束、optimizer callback 安全性、延迟执行模式。
+- `idapython/references/ida_allins_common.md` — 常用 `ida_allins` 指令常量（x86/ARM64）。
+- `idapython/microcode/references/constant_propagation.md` — PropState 引擎实现。
+- `idapython/microcode/references/deobfuscation_patterns.md` — 混淆模式目录及解决方案。
+- `idapython/microcode/references/maturity_levels.md` — MMAT_* 流水线各阶段。
+- `idapython/microcode/references/mcode_opcodes.md` — 完整 mcode_t 操作码表。
+
 ## 技能扩展布局
 
-为了后续扩展（Swift 元数据、ObjC Runtime、反调试、壳/解包）保持可维护性：
+为了后续扩展（Swift 元数据、ObjC Runtime、反调试、壳/解包、去混淆）保持可维护性：
 
-- `SKILL_CN.md` 只保留触发规则和主流程。
+- `SKILL.md` / `SKILL_CN.md` 保留高层工作流和触发规则。
 - 可复用自动化放在 `scripts/`。
-- 深入专题放在 `references/`（如 `references/swift/`、`references/objc/`、`references/macho/`）。
+- 深入专题放在 `references/`（如 `references/swift/`、`references/objc/`、`references/computed-branch/`）。
+- IDAPython 开发知识在 `idapython/`（子技能：插件开发、微码 API、50+ 模块文档）。
 - 新增能力按独立 workstream 添加，不把所有细节堆进主文档。
 - 共享脚本/文档中避免写入样本特定地址。
 
