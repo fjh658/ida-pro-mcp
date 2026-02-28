@@ -156,6 +156,10 @@ def connect_to_server(
         _client_id = result.get("client_id")
         _instance_id = instance_id
         _connected = True
+
+        # Set instance_id in rpc module so output download URLs include it
+        from .rpc import set_instance_id
+        set_instance_id(instance_id)
         _running = True
         _reconnect_attempt = 0
 

@@ -15,6 +15,7 @@ OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
 _output_cache: dict[str, Any] = {}
 _download_base_url: str = os.environ.get("IDA_MCP_URL", "http://127.0.0.1:13337")
+_instance_id: str = ""
 
 
 def set_download_base_url(url: str) -> None:
@@ -24,6 +25,11 @@ def set_download_base_url(url: str) -> None:
 
 def get_download_base_url() -> str:
     return _download_base_url
+
+
+def set_instance_id(instance_id: str) -> None:
+    global _instance_id
+    _instance_id = instance_id
 
 
 def _generate_output_id() -> str:
@@ -63,7 +69,10 @@ def _truncate_value(value: Any, depth: int = 0) -> Any:
 
 
 def _add_download_info(result: Any, output_id: str, total_chars: int) -> Any:
-    download_url = f"{_download_base_url}/output/{output_id}.json"
+    if _instance_id:
+        download_url = f"{_download_base_url}/output/{_instance_id}/{output_id}.json"
+    else:
+        download_url = f"{_download_base_url}/output/{output_id}.json"
     info = {
         "_output_truncated": True,
         "_total_chars": total_chars,
@@ -136,6 +145,22 @@ _install_tools_call_patch()
 
 
 # ============================================================================
+# Internal JSON-RPC method for output download (used by broker)
+# ============================================================================
+
+
+def _get_cached_output(output_id: str) -> dict:
+    """Internal method: retrieve cached output by ID."""
+    data = get_cached_output(output_id)
+    if data is None:
+        return {"found": False}
+    return {"found": True, "data": data}
+
+
+MCP_SERVER.registry.methods["_get_cached_output"] = _get_cached_output
+
+
+# ============================================================================
 # Decorators
 # ============================================================================
 
@@ -184,4 +209,5 @@ __all__ = [
     "get_cached_output",
     "set_download_base_url",
     "get_download_base_url",
+    "set_instance_id",
 ]

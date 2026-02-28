@@ -7,6 +7,7 @@ Uses SSE to push MCP requests to IDA.
 import json
 import os
 import queue
+import re
 import socketserver
 import threading
 import uuid
@@ -481,7 +482,13 @@ class IDARequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/ping":
             self._send_json({"status": "ok"})
         else:
-            self._send_json({"error": "Not found"}, 404)
+            output_match = re.match(r"^/output/([^/]+)/([a-f0-9-]+)\.(\w+)$", path)
+            if output_match:
+                self._handle_output_download(
+                    output_match.group(1), output_match.group(2), output_match.group(3)
+                )
+            else:
+                self._send_json({"error": "Not found"}, 404)
 
     # ------------------------------------------------------------------
     # IDA instance handlers
@@ -595,6 +602,23 @@ class IDARequestHandler(BaseHTTPRequestHandler):
                 400,
             )
             return
+
+        # Auto-wrap shorthand tool calls: if method is not a MCP protocol
+        # method (no "/" in name), treat it as a tool name and wrap into
+        # tools/call format.
+        if isinstance(request, dict):
+            method = request.get("method", "")
+            if method and "/" not in method and method not in ("ping", "initialize"):
+                request = {
+                    "jsonrpc": request.get("jsonrpc", "2.0"),
+                    "method": "tools/call",
+                    "params": {
+                        "name": method,
+                        "arguments": request.get("params", {}),
+                    },
+                    "id": request.get("id", "auto"),
+                }
+
         if timeout <= 0:
             self._send_json(
                 {
@@ -661,6 +685,59 @@ class IDARequestHandler(BaseHTTPRequestHandler):
             return
 
         self._send_json({"ok": True, "response": response})
+
+    # ------------------------------------------------------------------
+    # Output download (proxied from IDA)
+    # ------------------------------------------------------------------
+
+    def _handle_output_download(self, instance_id: str, output_id: str, extension: str):
+        """GET /output/<instance_id>/<output_id>.<ext> - Proxy cached output download from IDA."""
+        if REGISTRY.get_by_instance_id(instance_id) is None:
+            self._send_json({"error": f"Instance not found: {instance_id}"}, 404)
+            return
+
+        # Ask the specific IDA instance for the cached output
+        rpc_request = {
+            "jsonrpc": "2.0",
+            "method": "_get_cached_output",
+            "params": {"output_id": output_id},
+            "id": str(uuid.uuid4())[:8],
+        }
+        response = REGISTRY.send_request(rpc_request, instance_id=instance_id, timeout=10.0)
+        if response is None:
+            self._send_json({"error": "IDA request timed out"}, 504)
+            return
+
+        result = response.get("result")
+        if not isinstance(result, dict) or not result.get("found"):
+            self.send_error(404, "Output not found or expired")
+            return
+
+        data = result["data"]
+
+        if extension == "json":
+            content = json.dumps(data, indent=2)
+        elif isinstance(data, dict) and "code" in data:
+            content = str(data["code"])
+        elif isinstance(data, list) and data and isinstance(data[0], dict):
+            content = "\n\n".join(
+                str(item.get("code", item.get("asm", item.get("lines", ""))))
+                for item in data
+            )
+        else:
+            content = json.dumps(data, indent=2)
+
+        body = content.encode("utf-8")
+        content_type = "application/json" if extension == "json" else "text/plain"
+        self.send_response(200)
+        self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{output_id}.{extension}"'
+        )
+        self._send_cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     # ------------------------------------------------------------------
     # SSE
