@@ -373,6 +373,11 @@ class IDARequestHandler(BaseHTTPRequestHandler):
         """Escape HTML special characters."""
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#x27;")
 
+    @staticmethod
+    def _esc_js(s: str) -> str:
+        """Escape a string for safe embedding inside a JavaScript single-quoted literal."""
+        return s.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("/", "\\/").replace("<", "\\x3c").replace(">", "\\x3e")
+
     def _send_html(self, status: int, text: str):
         """Send HTML response with security headers (anti-clickjacking, CSP)."""
         body = text.encode("utf-8")
@@ -394,7 +399,7 @@ class IDARequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     # ------------------------------------------------------------------
-    # Security checks for config page
+    # Security checks
     # ------------------------------------------------------------------
 
     @property
@@ -419,6 +424,32 @@ class IDARequestHandler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _check_csrf(self) -> bool:
+        """Anti-CSRF for API endpoints.
+
+        If the request has an Origin header (browser request), validate it
+        against the CORS policy.  Requests without Origin (e.g. urllib, curl,
+        IDA plugin) are allowed — browsers always attach Origin to cross-origin
+        POSTs, so absence means a non-browser client.
+        """
+        if not self._check_host():
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            policy = BROKER_CONFIG.cors_policy
+            if policy == "unrestricted":
+                pass  # any origin allowed
+            elif policy == "local":
+                if not self._is_localhost_origin(origin):
+                    self.send_error(403, "Cross-origin request blocked")
+                    return False
+            else:  # "direct" — only same-origin
+                port = self.server_port
+                if origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+                    self.send_error(403, "Cross-origin request blocked")
+                    return False
+        return True
+
     # ------------------------------------------------------------------
     # HTTP method handlers
     # ------------------------------------------------------------------
@@ -436,7 +467,13 @@ class IDARequestHandler(BaseHTTPRequestHandler):
         """Handle POST requests"""
         path = urlparse(self.path).path
 
-        if path == "/register":
+        if path == "/config":
+            if not self._check_host() or not self._check_origin():
+                return
+            self._handle_config_post()
+        elif not self._check_csrf():
+            return
+        elif path == "/register":
             self._handle_register()
         elif path == "/unregister":
             self._handle_unregister()
@@ -446,10 +483,6 @@ class IDARequestHandler(BaseHTTPRequestHandler):
             self._handle_api_current_set()
         elif path == "/api/request":
             self._handle_api_request()
-        elif path == "/config":
-            if not self._check_origin():
-                return
-            self._handle_config_post()
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -979,7 +1012,7 @@ function setTools(mode) {{
                 <td>{arch}</td>
                 <td title="{bpath}">{bpath_short}</td>
                 <td>
-                    <button onclick="switchTo('{iid}')" class="btn btn-primary">Switch</button>
+                    <button onclick="switchTo('{self._esc_js(inst.get("instance_id", ""))}')" class="btn btn-primary">Switch</button>
                 </td>
             </tr>"""
 
@@ -1027,12 +1060,7 @@ setTimeout(() => location.reload(), 10000);
 </script>
 </body></html>"""
 
-        body = page_html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_html(200, page_html)
 
 
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):

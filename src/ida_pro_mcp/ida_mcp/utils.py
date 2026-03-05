@@ -64,21 +64,21 @@ class MemoryPatch(TypedDict):
     """Memory patch operation"""
 
     addr: Annotated[str, "Address to patch (hex or decimal)"]
-    data: Annotated[str, "Hex data to write (space-separated bytes)"]
+    data: Annotated[str, "Hex string to write (e.g. '90 90 90' or '909090', no 0x prefix)"]
 
 
 class IntRead(TypedDict):
     """Integer read request"""
 
     addr: Annotated[str, "Address to read from (hex or decimal)"]
-    ty: Annotated[str, "Integer class (i8/u64/i16le/i16be/etc)"]
+    ty: Annotated[str, "Integer type: [i|u][8|16|32|64][le|be]? (e.g. u32, i16be)"]
 
 
 class IntWrite(TypedDict):
     """Integer write request"""
 
     addr: Annotated[str, "Address to write to (hex or decimal)"]
-    ty: Annotated[str, "Integer class (i8/u64/i16le/i16be/etc)"]
+    ty: Annotated[str, "Integer type: [i|u][8|16|32|64][le|be]? (e.g. u32, i16be)"]
     value: Annotated[
         str,
         "Integer value as string (decimal or 0x..; negatives allowed for signed)",
@@ -96,7 +96,7 @@ class AsmPatchOp(TypedDict):
     """Assembly patch operation"""
 
     addr: Annotated[str, "Address (hex or decimal)"]
-    asm: Annotated[str, "Assembly instruction(s), semicolon-separated"]
+    asm: Annotated[str, "Assembly instruction(s), e.g. 'nop; nop'"]
 
 
 class FunctionRename(TypedDict):
@@ -116,7 +116,7 @@ class GlobalRename(TypedDict):
 class LocalRename(TypedDict):
     """Local variable rename operation"""
 
-    func_addr: Annotated[str, "Function address containing the local variable"]
+    func_addr: Annotated[str, "Function address (hex or decimal)"]
     old: Annotated[str, "Current variable name"]
     new: Annotated[str, "New variable name"]
 
@@ -124,7 +124,7 @@ class LocalRename(TypedDict):
 class StackRename(TypedDict):
     """Stack variable rename operation"""
 
-    func_addr: Annotated[str, "Function address containing the stack variable"]
+    func_addr: Annotated[str, "Function address (hex or decimal)"]
     old: Annotated[str, "Current variable name"]
     new: Annotated[str, "New variable name"]
 
@@ -204,7 +204,7 @@ class StructRead(TypedDict, total=False):
     to auto-detect from type information already applied at the address.
     """
 
-    addr: Annotated[str, "Memory address (hex or decimal)"]
+    addr: Annotated[str, "Address (hex, decimal, or symbol name)"]
     struct: Annotated[
         NotRequired[str], "Structure name (optional, auto-detect if omitted)"
     ]
@@ -213,43 +213,41 @@ class StructRead(TypedDict, total=False):
 class TypeEdit(TypedDict, total=False):
     """Type application operation"""
 
-    addr: Annotated[str, "Memory address"]
-    name: Annotated[str, "Variable/function name"]
-    ty: Annotated[str, "Type name or declaration"]
-    kind: Annotated[str, "Type of entity (auto-detected if omitted)"]
-    signature: Annotated[str, "Function signature (for kind=function)"]
-    variable: Annotated[str, "Local variable name (for kind=local)"]
+    addr: Annotated[str, "Address (hex or decimal)"]
+    name: Annotated[str, "Stack variable name (kind=stack)"]
+    ty: Annotated[str, "C type (e.g. 'int *'). For global/local/stack"]
+    kind: Annotated[str, "'function'|'global'|'local'|'stack' (auto-detected if omitted)"]
+    signature: Annotated[str, "C function prototype, e.g. 'int __fastcall foo(int a, int b)' (kind=function)"]
+    variable: Annotated[str, "Local variable name (kind=local)"]
 
 
 class StackVarDecl(TypedDict):
     """Stack variable declaration"""
 
-    addr: Annotated[str, "Function address"]
-    offset: Annotated[str, "Stack offset"]
+    addr: Annotated[str, "Function address (hex or decimal)"]
+    offset: Annotated[str, "Stack offset (hex or decimal)"]
     name: Annotated[str, "Variable name"]
-    ty: Annotated[str, "Type name"]
+    ty: Annotated[str, "C type (e.g. 'int', 'char *')"]
 
 
 class StackVarDelete(TypedDict):
     """Stack variable deletion"""
 
-    addr: Annotated[str, "Function address"]
+    addr: Annotated[str, "Function address (hex or decimal)"]
     name: Annotated[str, "Variable name"]
 
 
 class DefineOp(TypedDict, total=False):
     """Define function/code operation"""
 
-    addr: Annotated[
-        str, "Address to define (hex or decimal). Use 'start:end' for explicit bounds."
-    ]
-    end: Annotated[str, "Optional end address for explicit bounds"]
+    addr: Annotated[str, "Start address (hex or decimal)"]
+    end: Annotated[str, "Optional end address"]
 
 
 class UndefineOp(TypedDict, total=False):
     """Undefine operation"""
 
-    addr: Annotated[str, "Address to undefine (hex or decimal)"]
+    addr: Annotated[str, "Address (hex or decimal)"]
     end: Annotated[str, "Optional end address"]
     size: Annotated[int, "Optional size in bytes"]
 

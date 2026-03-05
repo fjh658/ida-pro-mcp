@@ -1,8 +1,11 @@
 from itertools import islice
+import re as _re
 import struct
+import sys
 from typing import Annotated, Optional
 import ida_lines
 import ida_funcs
+import ida_hexrays
 import idaapi
 import idautils
 import ida_typeinf
@@ -169,7 +172,7 @@ def _resolve_immediate_insn_start(
 @idasync
 @tool_timeout(90.0)
 def decompile(
-    addr: Annotated[str, "Function address to decompile"],
+    addr: Annotated[str, "Function address (hex or decimal, e.g. 0x401000). Use lookup_funcs to resolve names"],
 ) -> dict:
     """Decompile function to pseudocode"""
     try:
@@ -186,7 +189,7 @@ def decompile(
 @idasync
 @tool_timeout(90.0)
 def disasm(
-    addr: Annotated[str, "Function address to disassemble"],
+    addr: Annotated[str, "Function address (hex or decimal, e.g. 0x401000). Use lookup_funcs to resolve names"],
     max_instructions: Annotated[
         int, "Max instructions per function (default: 5000, max: 50000)"
     ] = 5000,
@@ -330,7 +333,7 @@ def disasm(
 @tool
 @idasync
 def xrefs_to(
-    addrs: Annotated[list[str] | str, "Addresses to find cross-references to"],
+    addrs: Annotated[list[str] | str, "Target addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
     limit: Annotated[int, "Max xrefs per address (default: 100, max: 1000)"] = 100,
 ) -> list[dict]:
     """Get cross-references to specified addresses"""
@@ -365,7 +368,7 @@ def xrefs_to(
 
 @tool
 @idasync
-def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[dict]:
+def xrefs_to_field(queries: Annotated[list[StructFieldQuery] | StructFieldQuery, "{struct, field} object(s), e.g. {struct: 'MyStruct', field: 'member1'}"]) -> list[dict]:
     """Get cross-references to structure fields"""
     if isinstance(queries, dict):
         queries = [queries]
@@ -458,7 +461,7 @@ def xrefs_to_field(queries: list[StructFieldQuery] | StructFieldQuery) -> list[d
 @tool
 @idasync
 def callees(
-    addrs: Annotated[list[str] | str, "Function addresses to get callees for"],
+    addrs: Annotated[list[str] | str, "Function addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
     limit: Annotated[int, "Max callees per function (default: 200, max: 500)"] = 200,
 ) -> list[dict]:
     """Get functions called by the specified functions"""
@@ -541,7 +544,7 @@ def callees(
 @idasync
 def find_bytes(
     patterns: Annotated[
-        list[str] | str, "Byte patterns to search for (e.g. '48 8B ?? ??')"
+        list[str] | str, "Byte patterns (e.g. '48 8B ?? ??'). Comma-separated string or list"
     ],
     limit: Annotated[int, "Max matches per pattern (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
@@ -628,7 +631,7 @@ def find_bytes(
 @tool
 @idasync
 def basic_blocks(
-    addrs: Annotated[list[str] | str, "Function addresses to get basic blocks for"],
+    addrs: Annotated[list[str] | str, "Function addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
     max_blocks: Annotated[
         int, "Max basic blocks per function (default: 1000, max: 10000)"
     ] = 1000,
@@ -713,7 +716,7 @@ def find(
         str, "Search type: 'string', 'immediate', 'data_ref', or 'code_ref'"
     ],
     targets: Annotated[
-        list[str | int] | str | int, "Search targets (strings, integers, or addresses)"
+        list[str | int] | str | int, "For 'string': literal text; for 'immediate': number (0x... or decimal); for 'data_ref'/'code_ref': address"
     ],
     limit: Annotated[int, "Max matches per target (default: 1000, max: 10000)"] = 1000,
     offset: Annotated[int, "Skip first N matches (default: 0)"] = 0,
@@ -1093,7 +1096,7 @@ def _scan_insn_ranges(
 @tool
 @idasync
 def export_funcs(
-    addrs: Annotated[list[str] | str, "Function addresses to export"],
+    addrs: Annotated[list[str] | str, "Function addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
     format: Annotated[
         str, "Export format: json (default), c_header, or prototypes"
     ] = "json",
@@ -1158,9 +1161,9 @@ def export_funcs(
 @idasync
 def callgraph(
     roots: Annotated[
-        list[str] | str, "Root function addresses to start call graph traversal from"
+        list[str] | str, "Root function addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"
     ],
-    max_depth: Annotated[int, "Maximum depth for call graph traversal"] = 5,
+    max_depth: Annotated[int, "Max traversal depth (default: 5)"] = 5,
     max_nodes: Annotated[
         int, "Max nodes across the graph (default: 1000, max: 100000)"
     ] = 1000,
@@ -1282,3 +1285,114 @@ def callgraph(
             results.append({"root": root, "error": str(e), "nodes": [], "edges": []})
 
     return results
+
+
+# ============================================================================
+# Microcode
+# ============================================================================
+
+# Regex to strip SWIG color control characters from microcode text
+if not hasattr(sys, "_mc_re"):
+    sys._mc_re = _re.compile(r"[\x01-\x1f]")
+
+# Maturity level name mapping
+_MMAT_NAMES = {
+    "generated": 1,
+    "preoptimized": 2,
+    "locopt": 3,
+    "calls": 4,
+    "glbopt1": 5,
+    "glbopt2": 6,
+    "glbopt3": 7,
+    "lvars": 8,
+}
+
+
+class _CapturePrinter(ida_hexrays.vd_printer_t):
+    """Subclass vd_printer_t to capture microcode text output."""
+
+    def __init__(self):
+        ida_hexrays.vd_printer_t.__init__(self)
+        self.lines = []
+
+    def _print(self, indent, line):
+        import sys
+
+        self.lines.append((" " * indent) + sys._mc_re.sub("", line))
+        return 1
+
+
+@tool
+@idasync
+@tool_timeout(90.0)
+def get_microcode(
+    addr: Annotated[
+        str,
+        "Function address (hex or decimal, e.g. 0x401000). Use lookup_funcs to resolve names",
+    ],
+    maturity: Annotated[
+        str,
+        "Microcode maturity level: 'generated' (1), 'preoptimized' (2), 'locopt' (3), "
+        "'calls' (4), 'glbopt1' (5), 'glbopt2' (6), 'glbopt3' (7), 'lvars' (8). "
+        "Default: 'lvars'. Lower levels show more raw detail; higher levels show optimized code.",
+    ] = "lvars",
+) -> dict:
+    """Get Hex-Rays microcode for a function at a specific optimization maturity level.
+
+    Returns the intermediate representation used by Hex-Rays decompiler.
+    Lower maturity levels preserve more raw machine semantics; higher levels
+    show progressively optimized code closer to the final pseudocode.
+    Useful for understanding compiler optimizations, analyzing obfuscated code,
+    or debugging decompilation issues."""
+    try:
+        start = parse_address(addr)
+        pfn = ida_funcs.get_func(start)
+        if not pfn:
+            return {"addr": addr, "microcode": None, "error": "No function at address"}
+
+        # Resolve maturity level
+        mat_str = (maturity or "lvars").strip().lower()
+        mat_level = _MMAT_NAMES.get(mat_str)
+        if mat_level is None:
+            # Try numeric
+            try:
+                mat_level = int(mat_str)
+            except ValueError:
+                return {
+                    "addr": addr,
+                    "microcode": None,
+                    "error": f"Unknown maturity level: {maturity}. "
+                    f"Valid: {', '.join(_MMAT_NAMES.keys())} or 1-8",
+                }
+        if mat_level < 1 or mat_level > 8:
+            return {
+                "addr": addr,
+                "microcode": None,
+                "error": f"Maturity level must be 1-8, got {mat_level}",
+            }
+
+        mbr = ida_hexrays.mba_ranges_t(pfn)
+        hf = ida_hexrays.hexrays_failure_t()
+        mba = ida_hexrays.gen_microcode(mbr, hf, None, 0, mat_level)
+        if not mba:
+            return {
+                "addr": addr,
+                "microcode": None,
+                "error": f"gen_microcode failed: {hf.str}",
+            }
+
+        mp = _CapturePrinter()
+        mba._print(mp)
+
+        func_name = ida_funcs.get_func_name(pfn.start_ea) or "<unnamed>"
+        return {
+            "addr": hex(pfn.start_ea),
+            "function": func_name,
+            "maturity": mat_str,
+            "maturity_level": mat_level,
+            "blocks": mba.qty,
+            "lines": len(mp.lines),
+            "microcode": "\n".join(mp.lines),
+        }
+    except Exception as e:
+        return {"addr": addr, "microcode": None, "error": str(e)}

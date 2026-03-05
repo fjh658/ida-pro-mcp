@@ -26,7 +26,7 @@ from jsonrpc import JsonRpcRegistry
 
 class ToolSchemaRequiredTests(unittest.TestCase):
     def test_dynamic_wrapper_marks_only_true_required_fields(self):
-        # Regression guard: wrapper-injected broker routing arg `_instance`
+        # Regression guard: wrapper-injected broker routing arg `instance_id`
         # must stay optional, while true tool params follow parsed requiredness.
         tool_def = ToolDef(
             name="demo_tool",
@@ -55,8 +55,8 @@ class ToolSchemaRequiredTests(unittest.TestCase):
         required = set(schema["inputSchema"].get("required", []))
         properties = schema["inputSchema"]["properties"]
 
-        self.assertIn("_instance", properties)
-        self.assertNotIn("_instance", required)
+        self.assertIn("instance_id", properties)
+        self.assertNotIn("instance_id", required)
         self.assertIn("addr", required)
         self.assertNotIn("offset", required)
         self.assertNotIn("include_total", required)
@@ -79,8 +79,8 @@ class ToolSchemaRequiredTests(unittest.TestCase):
         required = set(schema["inputSchema"].get("required", []))
         properties = schema["inputSchema"]["properties"]
 
-        self.assertIn("_instance", properties)
-        self.assertIn("anyOf", properties["_instance"])
+        self.assertIn("instance_id", properties)
+        self.assertIn("anyOf", properties["instance_id"])
         self.assertIn("anyOf", properties["queries"])
         query_variants = properties["queries"]["anyOf"]
         self.assertIn({"type": "string"}, query_variants)
@@ -91,7 +91,7 @@ class ToolSchemaRequiredTests(unittest.TestCase):
         self.assertEqual(properties["include_total"]["default"], False)
 
         self.assertIn("queries", required)
-        self.assertNotIn("_instance", required)
+        self.assertNotIn("instance_id", required)
         self.assertNotIn("limit", required)
         self.assertNotIn("include_total", required)
 

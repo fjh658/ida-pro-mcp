@@ -22,12 +22,12 @@ from typing import Optional, BinaryIO
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 if __name__ == "__main__" or __package__ is None:
     sys.path.insert(0, os.path.dirname(SCRIPT_DIR))
-    from ida_pro_mcp.http_server import IDAHttpServer, REGISTRY, set_tool_defs
+    from ida_pro_mcp.http_server import IDAHttpServer, REGISTRY, set_tool_defs, BrokerConfig
     from ida_pro_mcp.tool_registry import parse_all_api_files, tool_to_mcp_schema, ToolDef
     from ida_pro_mcp.install import install_ida_plugin, install_mcp_servers, print_mcp_config
     from ida_pro_mcp.broker_client import BrokerClient
 else:
-    from .http_server import IDAHttpServer, REGISTRY, set_tool_defs
+    from .http_server import IDAHttpServer, REGISTRY, set_tool_defs, BrokerConfig
     from .tool_registry import parse_all_api_files, tool_to_mcp_schema, ToolDef
     from .install import install_ida_plugin, install_mcp_servers, print_mcp_config
     from .broker_client import BrokerClient
@@ -35,9 +35,19 @@ else:
 # Import MCP implementation
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "ida_mcp"))
 from zeromcp import McpServer
-from zeromcp.jsonrpc import JsonRpcResponse
+from zeromcp.jsonrpc import JsonRpcResponse, mcp_log as _mcp_log
 sys.path.pop(0)
 
+def mcp_log(msg: str) -> None:
+    _mcp_log(msg, file=sys.stderr)
+
+
+# ============================================================================
+# Default port / URL (single source of truth for server side)
+# ============================================================================
+
+DEFAULT_PORT = 13337
+DEFAULT_BROKER_URL = f"http://127.0.0.1:{DEFAULT_PORT}"
 
 # ============================================================================
 # stdio output (for sending notifications)
@@ -61,7 +71,7 @@ def send_notification(method: str, params: dict = None):
             _stdio_stdout.write(json.dumps(notification).encode("utf-8") + b"\n")
             _stdio_stdout.flush()
     except Exception as e:
-        print(f"[MCP] Failed to send notification: {e}", file=sys.stderr)
+        mcp_log(f"Failed to send notification: {e}")
 
 
 # ============================================================================
@@ -77,13 +87,16 @@ HTTP_SERVER: Optional[IDAHttpServer] = None
 # Broker client (used in MCP mode, requests instance list and forwards IDA requests to Broker)
 _broker_client: Optional[BrokerClient] = None
 
+# Broker config (reads file directly, no HTTP needed for tools/list filtering)
+_broker_config = BrokerConfig()
+
 
 def _broker():
     """Get Broker client, always available in MCP mode"""
     global _broker_client
     if _broker_client is None:
         _broker_client = BrokerClient(
-            os.environ.get("IDA_MCP_BROKER_URL", "http://127.0.0.1:13337"),
+            os.environ.get("IDA_MCP_BROKER_URL", DEFAULT_BROKER_URL),
             10.0,
         )
     return _broker_client
@@ -109,7 +122,7 @@ def instance_current() -> dict:
 
 @mcp.tool
 def instance_switch(instance_id: str) -> dict:
-    """Switch to specified IDA instance. Local tool, no IDA connection required."""
+    """Switch the default IDA instance (convenience shortcut). Prefer passing instance_id directly to each tool call instead — this enables parallel calls across multiple instances. Local tool, no IDA connection required."""
     return _broker().set_current(instance_id)
 
 
@@ -141,26 +154,29 @@ def _build_ida_tool_input_schema(tool_def: ToolDef) -> dict:
     """Build explicit input schema for IDA tool wrappers.
 
     This preserves parser-derived types (int/list/bool/...) instead of relying
-    on runtime Any annotations, and injects broker-only `_instance` selector.
+    on runtime Any annotations, and injects broker-only `instance_id` selector.
     """
     # Build the "real" schema from static parser output. This path keeps
     # declared API types (including nested unions/TypedDicts) intact.
     base_input_schema = tool_to_mcp_schema(tool_def)["inputSchema"]
     properties = dict(base_input_schema.get("properties", {}))
 
-    # `_instance` is a broker-side routing control and must not be forwarded to
-    # IDA tool handlers. We expose it in schema as optional string|null.
-    properties["_instance"] = {
+    # `instance_id` is a broker-side routing control and must not be forwarded
+    # to IDA tool handlers. We expose it in schema as optional string|null.
+    properties["instance_id"] = {
         "anyOf": [{"type": "string"}, {"type": "null"}],
-        "description": "Target IDA instance ID (e.g. 'ida-86893'). If omitted, uses the current active instance.",
+        "description": (
+            "Target IDA instance ID (format: 'ida-{PID}-[{IP}]', e.g. 'ida-86893-[192.168.1.100]'). "
+            "Preferred: pass this directly to enable parallel calls across instances. "
+            "If omitted, uses the current active instance set by instance_switch."
+        ),
     }
 
-    # Ensure `_instance` is never marked as required, even if upstream schema
-    # were to include it accidentally.
+    # Ensure `instance_id` is never marked as required.
     required = [
         key
         for key in base_input_schema.get("required", [])
-        if key != "_instance"
+        if key != "instance_id"
     ]
 
     # Return a defensive copy because McpServer schema generation mutates/copies
@@ -232,10 +248,14 @@ def _create_ida_tool_wrapper(tool_def: ToolDef):
     wrapper.__doc__ = tool_def.description
 
     annotations = {}
-    # _instance as first parameter: select which IDA instance to target
-    annotations["_instance"] = Annotated[
+    # instance_id as first parameter: select which IDA instance to target
+    annotations["instance_id"] = Annotated[
         OptionalType[str],
-        "Target IDA instance ID (e.g. 'ida-86893'). If omitted, uses the current active instance."
+        (
+            "Target IDA instance ID (format: 'ida-{PID}-[{IP}]', e.g. 'ida-86893-[192.168.1.100]'). "
+            "Preferred: pass this directly to enable parallel calls across instances. "
+            "If omitted, uses the current active instance set by instance_switch."
+        ),
     ]
 
     input_schema = _build_ida_tool_input_schema(tool_def)
@@ -256,10 +276,10 @@ def _create_ida_tool_wrapper(tool_def: ToolDef):
     # marked as required by schema generation.
     signature_params = [
         inspect.Parameter(
-            "_instance",
+            "instance_id",
             kind=inspect.Parameter.KEYWORD_ONLY,
             default=None,
-            annotation=annotations["_instance"],
+            annotation=annotations["instance_id"],
         )
     ]
     for param in tool_def.params:
@@ -298,9 +318,9 @@ def _register_ida_tools(enable_unsafe: bool = False):
         registered_count += 1
     
     if skipped_unsafe > 0:
-        print(f"[MCP] Registered {registered_count} IDA tools (skipped {skipped_unsafe} unsafe tools)", file=sys.stderr)
+        mcp_log(f"Registered {registered_count} IDA tools (skipped {skipped_unsafe} unsafe tools)")
     else:
-        print(f"[MCP] Registered {registered_count} IDA tools", file=sys.stderr)
+        mcp_log(f"Registered {registered_count} IDA tools")
 
 
 def _register_ida_resources():
@@ -316,7 +336,7 @@ def _register_ida_resources():
         
         mcp.resources.methods[res_def.name] = make_wrapper(res_def.uri)
     
-    print(f"[MCP] Registered {len(_IDA_RESOURCES)} IDA resources", file=sys.stderr)
+    mcp_log(f"Registered {len(_IDA_RESOURCES)} IDA resources")
 
 
 # ============================================================================
@@ -352,10 +372,10 @@ def route_to_ida(request: dict, instance_id: Optional[str] = None) -> Optional[d
 
 
 def _extract_instance_id(request: dict) -> Optional[str]:
-    """Extract and remove _instance from tool call arguments.
+    """Extract and remove instance_id from tool call arguments.
 
     Returns the instance_id if found, None otherwise.
-    The _instance key is removed from the request so IDA doesn't see it.
+    The instance_id key is removed from the request so IDA doesn't see it.
     """
     params = request.get("params", {})
     if not isinstance(params, dict):
@@ -363,14 +383,14 @@ def _extract_instance_id(request: dict) -> Optional[str]:
     arguments = params.get("arguments", {})
     if not isinstance(arguments, dict):
         return None
-    return arguments.pop("_instance", None)
+    return arguments.pop("instance_id", None)
 
 
 def _extract_resource_instance(request: dict) -> Optional[str]:
-    """Extract ?instance=xxx from resource URI and strip it before forwarding.
+    """Extract ?instance_id=xxx from resource URI and strip it before forwarding.
 
     Returns the instance_id if found, None otherwise.
-    The instance query parameter is removed from the URI so IDA sees the clean URI.
+    The instance_id query parameter is removed from the URI so IDA sees the clean URI.
     """
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -383,9 +403,9 @@ def _extract_resource_instance(request: dict) -> Optional[str]:
 
     parsed = urlparse(uri)
     qs = parse_qs(parsed.query)
-    instance_id = qs.pop("instance", [None])[0]
+    instance_id = qs.pop("instance_id", [None])[0]
     if instance_id:
-        # Rebuild URI without the instance parameter
+        # Rebuild URI without the instance_id parameter
         new_query = urlencode({k: v[0] for k, v in qs.items()}) if qs else ""
         params["uri"] = urlunparse(parsed._replace(query=new_query))
     return instance_id
@@ -408,31 +428,30 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
         tool_name = params.get("name", "") if isinstance(params, dict) else ""
 
         if tool_name in IDA_TOOLS:
-            # Extract optional _instance parameter before forwarding
+            # Extract optional instance_id parameter before forwarding
             target_instance = _extract_instance_id(request)
             return route_to_ida(request, instance_id=target_instance)
 
         return dispatch_original(request)
     
-    # tools/list - return all tools, filtered by broker config
+    # tools/list - return all tools, filtered by broker config (read file directly, no HTTP)
     if method == "tools/list":
         response = dispatch_original(request)
         tools = response.get("result", {}).get("tools", []) if response else []
-        # Filter out tools disabled in broker config
         try:
-            config = _broker().get_config()
-            if config and "enabled_tools" in config:
-                enabled = config["enabled_tools"]
+            _broker_config._load()  # Re-read from disk to pick up config.html changes
+            enabled = _broker_config.get_enabled_tools()
+            if enabled:
                 tools = [t for t in tools if enabled.get(t.get("name", ""), True)]
                 if response and "result" in response:
                     response["result"]["tools"] = tools
         except Exception:
-            pass  # If config query fails, return all tools
+            pass  # If config read fails, return all tools
         current = _broker().get_current()
         if current and not current.get("error"):
-            print(f"[MCP] tools/list: {len(tools)} tools (IDA: {current.get('name', '')})", file=sys.stderr)
+            mcp_log(f"tools/list: {len(tools)} tools (IDA: {current.get('name', '')})")
         else:
-            print(f"[MCP] tools/list: {len(tools)} tools (waiting for IDA connection)", file=sys.stderr)
+            mcp_log(f"tools/list: {len(tools)} tools (waiting for IDA connection)")
         return response
     
     # resources related
@@ -447,11 +466,11 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
         if response and "result" in response:
             result = response["result"]
             templates = result.get("resourceTemplates", [])
-            # Append {?instance} to existing templates (RFC 6570)
+            # Append {?instance_id} to existing templates (RFC 6570)
             for t in templates:
                 uri = t.get("uriTemplate", "")
-                if "{?instance}" not in uri:
-                    t["uriTemplate"] = uri + "{?instance}"
+                if "{?instance_id}" not in uri:
+                    t["uriTemplate"] = uri + "{?instance_id}"
             # Add instance-aware templates for static resources
             list_resp = dispatch_original(
                 {"jsonrpc": "2.0", "method": "resources/list", "id": None}
@@ -459,7 +478,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
             if list_resp and "result" in list_resp:
                 for res in list_resp["result"].get("resources", []):
                     templates.append({
-                        "uriTemplate": res["uri"] + "{?instance}",
+                        "uriTemplate": res["uri"] + "{?instance_id}",
                         "name": res["name"],
                         "description": res.get("description", ""),
                         "mimeType": res.get("mimeType", "application/json"),
@@ -469,7 +488,7 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
     if method == "resources/read":
         if not _broker().has_instances():
             return {"jsonrpc": "2.0", "result": {"contents": []}, "id": request.get("id")}
-        # Extract optional ?instance=xxx from URI before forwarding (RFC 6570)
+        # Extract optional ?instance_id=xxx from URI before forwarding (RFC 6570)
         target_instance = _extract_resource_instance(request)
         return route_to_ida(request, instance_id=target_instance)
     
@@ -489,7 +508,7 @@ def _is_broker_alive(broker_url: str) -> bool:
     from urllib.parse import urlparse
     parsed = urlparse(broker_url)
     host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or 13337
+    port = parsed.port or DEFAULT_PORT
     try:
         with socket.create_connection((host, port), timeout=1.0):
             return True
@@ -505,10 +524,10 @@ def _ensure_broker(broker_url: str, port: int):
     broker_port = parsed.port or port
 
     if _is_broker_alive(broker_url):
-        print("[MCP] Broker already running", file=sys.stderr)
+        mcp_log("Broker already running")
         return
 
-    print("[MCP] Broker not detected, auto-starting...", file=sys.stderr)
+    mcp_log("Broker not detected, auto-starting...")
     server_script = os.path.realpath(__file__)
     subprocess.Popen(
         [sys.executable, server_script, "--broker", "--port", str(broker_port)],
@@ -521,9 +540,9 @@ def _ensure_broker(broker_url: str, port: int):
     for _ in range(20):
         time.sleep(0.25)
         if _is_broker_alive(broker_url):
-            print("[MCP] Broker auto-started on port", broker_port, file=sys.stderr)
+            mcp_log(f"Broker auto-started on port {broker_port}")
             return
-    print("[MCP] WARNING: Broker failed to start within 5s", file=sys.stderr)
+    mcp_log("WARNING: Broker failed to start within 5s")
 
 
 def main():
@@ -535,9 +554,9 @@ def main():
     parser.add_argument("--allow-ida-free", action="store_true", help="Allow installation for IDA Free")
     parser.add_argument("--config", action="store_true", help="Print MCP configuration")
     parser.add_argument("--unsafe", action="store_true", help="Enable unsafe tools (debugger-related)")
-    parser.add_argument("--port", type=int, default=13337, help="HTTP server port (Broker mode)")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="HTTP server port (Broker mode)")
     parser.add_argument("--broker", action="store_true", help="Only start Broker (HTTP), no stdio; run separately first for multi-window/multi-IDA setups")
-    parser.add_argument("--broker-url", type=str, default="http://127.0.0.1:13337", help="Broker URL for MCP mode connection")
+    parser.add_argument("--broker-url", type=str, default=DEFAULT_BROKER_URL, help="Broker URL for MCP mode connection")
     args = parser.parse_args()
 
     # Register tools
@@ -568,7 +587,7 @@ def main():
         # Broker mode: only start HTTP, hold REGISTRY, block main thread
         HTTP_SERVER = IDAHttpServer(port=args.port)
         HTTP_SERVER.start()
-        print("[MCP] Broker started, press Ctrl+C to stop", file=sys.stderr)
+        mcp_log("Broker started, press Ctrl+C to stop")
         try:
             while True:
                 time.sleep(3600)
@@ -590,7 +609,7 @@ def main():
     except (KeyboardInterrupt, EOFError):
         pass
     finally:
-        print("[MCP] Shutting down...", file=sys.stderr)
+        mcp_log("Shutting down...")
         _stdio_stdout = None
         os._exit(0)
 

@@ -8,6 +8,7 @@ import idaapi
 import idautils
 import ida_nalt
 
+from .zeromcp.jsonrpc import mcp_log
 from .rpc import tool
 from .sync import idasync
 
@@ -34,7 +35,7 @@ def init_caches():
     t0 = time.perf_counter()
     strings = _get_strings_cache()
     t1 = time.perf_counter()
-    print(f"[MCP] Cached {len(strings)} strings in {(t1 - t0) * 1000:.0f}ms")
+    mcp_log(f"Cached {len(strings)} strings in {(t1 - t0) * 1000:.0f}ms")
 
 
 from .utils import (
@@ -82,7 +83,7 @@ def _parse_func_query(query: str) -> int:
 @tool
 @idasync
 def lookup_funcs(
-    queries: Annotated[list[str] | str, "Address(es) or name(s)"],
+    queries: Annotated[list[str] | str, "Address (0x401000), sub_XXXX, or symbol name. Comma-separated string or list"],
 ) -> list[dict]:
     """Get functions by address or name (auto-detects)"""
     queries = normalize_list_input(queries)
@@ -126,7 +127,7 @@ def lookup_funcs(
 def int_convert(
     inputs: Annotated[
         list[NumberConversion] | NumberConversion,
-        "Convert numbers to various formats (hex, decimal, binary, ascii)",
+        "Number(s) to convert — string (e.g. '0xff', '255') or {text, size} object. Comma-separated or list",
     ],
 ) -> list[dict]:
     """Convert numbers to different formats"""
@@ -196,7 +197,7 @@ def int_convert(
 def list_funcs(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
-        "List functions with optional filtering and pagination",
+        "Glob pattern (e.g. 'main*') or {filter, offset, count} object. Comma-separated or list",
     ],
 ) -> list[Page[Function]]:
     """List functions"""
@@ -226,7 +227,7 @@ def list_funcs(
 def list_globals(
     queries: Annotated[
         list[ListQuery] | ListQuery | str,
-        "List global variables with optional filtering and pagination",
+        "Glob pattern (e.g. 'g_*') or {filter, offset, count} object. Comma-separated or list",
     ],
 ) -> list[Page[Global]]:
     """List globals"""
@@ -257,8 +258,8 @@ def list_globals(
 @tool
 @idasync
 def imports(
-    offset: Annotated[int, "Offset"],
-    count: Annotated[int, "Count (0=all)"],
+    offset: Annotated[int, "Number of imports to skip (for pagination)"],
+    count: Annotated[int, "Number of imports to return (0=all)"],
 ) -> Page[Import]:
     """List imports"""
     nimps = ida_nalt.get_import_module_qty()

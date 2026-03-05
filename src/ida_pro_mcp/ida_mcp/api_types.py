@@ -31,7 +31,7 @@ from . import compat
 @tool
 @idasync
 def declare_type(
-    decls: Annotated[list[str] | str, "C type declarations"],
+    decls: Annotated[list[str] | str, "C type declaration(s) (e.g. 'struct Foo { int x; };'). Use JSON list for multiple — avoid comma-separated since C declarations contain commas"],
 ) -> list[dict]:
     """Declare types"""
     decls = normalize_list_input(decls)
@@ -62,7 +62,7 @@ def declare_type(
 
 @tool
 @idasync
-def read_struct(queries: list[StructRead] | StructRead) -> list[dict]:
+def read_struct(queries: Annotated[list[StructRead] | StructRead, "{addr, struct?} object(s), e.g. {addr: '0x401000', struct: 'MyStruct'}. struct auto-detected if omitted"]) -> list[dict]:
     """Reads struct type definition and parses actual memory values at the
     given address as instances of that struct type.
 
@@ -265,7 +265,7 @@ def search_structs(
 
 @tool
 @idasync
-def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
+def set_type(edits: Annotated[list[TypeEdit] | TypeEdit, "Type operations, e.g. {addr: '0x401000', ty: 'int *'} or {addr: '0x401000', signature: 'int __fastcall foo(int a)'}. kind auto-detected"]) -> list[dict]:
     """Apply types (function/global/local/stack)"""
 
     def parse_addr_type(s: str) -> dict:
@@ -399,7 +399,7 @@ def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
 @tool
 @idasync
 def infer_types(
-    addrs: Annotated[list[str] | str, "Addresses to infer types for"],
+    addrs: Annotated[list[str] | str, "Addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
 ) -> list[dict]:
     """Infer types"""
     addrs = normalize_list_input(addrs)

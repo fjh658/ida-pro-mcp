@@ -11,6 +11,13 @@ import urllib.error
 import urllib.request
 from typing import Any, Optional
 
+from datetime import datetime, timezone
+
+def mcp_log(msg: str) -> None:
+    now = datetime.now(timezone.utc).astimezone()
+    ts = now.strftime("%Y-%m-%d %H:%M:%S.") + f"{now.microsecond // 1000:03d}" + now.strftime("%z")
+    print(f"{ts} [MCP] {msg}", file=sys.stderr)
+
 # TTL for has_instances cache (seconds)
 _HAS_INSTANCES_TTL = 2.0
 
@@ -52,10 +59,10 @@ class BrokerClient:
                 raw = e.read().decode("utf-8")
                 return json.loads(raw) if raw else None
             except Exception:
-                print(f"[MCP] Broker HTTP {e.code} {path}: {e}", file=sys.stderr)
+                mcp_log(f"Broker HTTP {e.code} {path}: {e}")
                 return None
         except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError) as e:
-            print(f"[MCP] Broker request failed {path}: {e}", file=sys.stderr)
+            mcp_log(f"Broker request failed {path}: {e}")
             return None
 
     def list_instances(self) -> list[dict]:
@@ -118,10 +125,6 @@ class BrokerClient:
             "broker_error": -32003,
         }
         return jsonrpc_error(code_map.get(error_code, -32003), message, error_code)
-
-    def get_config(self) -> Optional[dict]:
-        """GET /api/config - Get broker configuration (CORS, enabled tools)."""
-        return self._request("GET", "/api/config")
 
     def has_instances(self) -> bool:
         """Return whether any instances are connected (cached for 2s)."""

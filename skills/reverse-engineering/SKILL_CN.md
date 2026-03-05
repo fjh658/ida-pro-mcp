@@ -167,8 +167,8 @@ Swift 相关细节下沉到 references，保持主文档轻量。
 
 - **数字转换**：永远使用 `int_convert` 工具，不要手动转换hex/dec
 - **地址格式**：使用 `0x` 前缀表示地址
-- **多实例**：用 `instance_list` 查看已连接的IDA，`instance_switch` 切换；也可在任意工具调用中传入 `_instance` 参数直接指定目标实例，无需切换。Resources 也支持 `?instance=<id>` 查询参数（如 `ida://idb/segments?instance=ida-86893`）
-- **超时处理**：大函数反编译可能较慢，耐心等待
+- **多实例**：用 `instance_list` 查看已连接的 IDA；在任意工具调用中传入 `instance_id` 参数可直接指定目标实例（推荐——支持跨实例并行调用），也可用 `instance_switch` 作为便捷方式更改默认目标。Resources 也支持 `?instance_id=<id>` 查询参数（如 `ida://idb/segments?instance_id=ida-86893`）。支持跨机器协作——实例 ID 包含局域网 IP（如 `ida-12345-[192.168.1.10]`），远程 IDA 通过 SSE 连接 MCP server，自动重连。
+- **超时处理**：安装 `decompile_timeout` 插件（`~/.idapro/plugins/`）可自动超时取消卡死的反编译。Python: `from decompile_timeout import decompile_with_timeout; code, err = decompile_with_timeout(ea, 10.0)`。未安装插件时，大函数反编译可能无限挂起。
 - **反汇编 vs 反编译**：反编译失败、需要精确指令细节或分析混淆代码时用 `disasm`；理解高层逻辑时用 `decompile`
 - **调用图深度**：使用 `callgraph` 时控制 `max_depth` 避免输出过多；先从浅层（2-3层）开始，按需深入
 

@@ -14,6 +14,7 @@ from types import UnionType
 from urllib.parse import urlparse, parse_qs
 from io import BufferedIOBase
 
+from .jsonrpc import mcp_log  # re-use timestamped log
 from .jsonrpc import JsonRpcRegistry, JsonRpcError, JsonRpcException, get_current_request_id, register_pending_request, unregister_pending_request, cancel_request
 
 class McpToolError(Exception):
@@ -228,8 +229,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, "Missing ?session for SSE POST")
             return
 
-        # Parse extensions from query params and store in thread-local
-        extensions = self._parse_extensions(self.path)
+        # Parse extensions from query params and merge with defaults
+        extensions = self._parse_extensions(self.path) | self.mcp_server.default_extensions
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
 
         # Dispatch to MCP registry
@@ -256,8 +257,8 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle_mcp_post(self, body: bytes):
-        # Parse extensions from query params and store in thread-local
-        extensions = self._parse_extensions(self.path)
+        # Parse extensions from query params and merge with defaults
+        extensions = self._parse_extensions(self.path) | self.mcp_server.default_extensions
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
 
         # Dispatch to MCP registry
@@ -295,6 +296,7 @@ class McpServer:
         self._protocol_version = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
         self._extensions_registry = extensions if extensions is not None else {}  # group -> set of tool names
+        self.default_extensions: set[str] = set()  # extensions enabled by default (e.g. via --unsafe flag)
 
         # Register MCP protocol methods with correct names
         self.registry = JsonRpcRegistry()
@@ -325,7 +327,7 @@ class McpServer:
 
     def serve(self, host: str, port: int, *, background = True, request_handler = McpHttpRequestHandler):
         if self._running:
-            print("[MCP] Server is already running")
+            mcp_log("Server is already running")
             return
 
         # Create server with deferred binding
@@ -355,7 +357,7 @@ class McpServer:
         # Only start thread after successful bind
         self._running = True
 
-        print("[MCP] Server started:")
+        mcp_log("Server started:")
         print(f"  Streamable HTTP: http://{host}:{port}/mcp")
         print(f"  SSE: http://{host}:{port}/sse")
 
@@ -363,7 +365,7 @@ class McpServer:
             try:
                 self._http_server.serve_forever() # type: ignore
             except Exception as e:
-                print(f"[MCP] Server error: {e}")
+                mcp_log(f"Server error: {e}")
                 traceback.print_exc()
             finally:
                 self._running = False
@@ -397,7 +399,7 @@ class McpServer:
             self._server_thread.join()
             self._server_thread = None
 
-        print("[MCP] Server stopped")
+        mcp_log("Server stopped")
 
     def stdio(self, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None):
         stdin = stdin or sys.stdin.buffer
@@ -455,28 +457,34 @@ class McpServer:
         enabled = getattr(self._enabled_extensions, "data", set())
         tools = []
         for func_name, func in self.tools.methods.items():
-            # Check if tool belongs to an extension group
-            tool_group = self._get_tool_extension(func_name)
-            if tool_group and tool_group not in enabled:
-                continue  # Skip tools from disabled extension groups
+            # Check if tool belongs to any extension groups
+            missing = self._get_missing_extensions(func_name, enabled)
+            if missing:
+                continue  # Skip tools with unmet extension requirements
             tools.append(self._generate_tool_schema(func_name, func))
         return {"tools": tools}
 
-    def _get_tool_extension(self, func_name: str) -> str | None:
-        """Return extension group name if tool belongs to one, else None"""
+    def _get_tool_extensions(self, func_name: str) -> set[str]:
+        """Return all extension groups the tool belongs to"""
+        groups = set()
         for group, tools in self._extensions_registry.items():
             if func_name in tools:
-                return group
-        return None
+                groups.add(group)
+        return groups
+
+    def _get_missing_extensions(self, func_name: str, enabled: set[str]) -> set[str]:
+        """Return extension groups required but not enabled for this tool"""
+        return self._get_tool_extensions(func_name) - enabled
 
     def _mcp_tools_call(self, name: str, arguments: dict | None = None, _meta: dict | None = None) -> dict:
         """MCP tools/call method"""
-        # Check if tool requires an extension that isn't enabled
+        # Check if tool requires extensions that aren't enabled
         enabled = getattr(self._enabled_extensions, "data", set())
-        tool_group = self._get_tool_extension(name)
-        if tool_group and tool_group not in enabled:
+        missing = self._get_missing_extensions(name, enabled)
+        if missing:
+            missing_str = ", ".join(sorted(missing))
             return {
-                "content": [{"type": "text", "text": f"Tool '{name}' requires extension '{tool_group}'. Enable with ?ext={tool_group}"}],
+                "content": [{"type": "text", "text": f"Tool '{name}' requires extension(s): {missing_str}. Enable with ?ext={missing_str}"}],
                 "isError": True,
             }
 
@@ -515,7 +523,7 @@ class McpServer:
     def _mcp_notifications_cancelled(self, requestId: int | str, reason: str | None = None) -> None:
         """MCP notifications/cancelled - cancel an in-flight request"""
         if cancel_request(requestId):
-            print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
+            mcp_log(f"Cancelled request {requestId}: {reason or 'no reason'}")
         # Notifications don't return a response
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:

@@ -306,8 +306,8 @@ When an IDA instance is connected via MCP, prefer MCP tools for interactive anal
 - `rename` / `set_comments` — Annotate the database
 - `set_type` / `declare_type` — Apply or create types
 
-**Important**: When multiple IDA instances are open, always use the `_instance` parameter to
-target the correct one. NEVER switch the active instance — it disrupts the user's workflow.
+**Important**: When multiple IDA instances are open, always use the `instance_id` parameter to
+target the correct one. Prefer passing `instance_id` directly over calling `instance_switch` — it enables parallel calls and avoids disrupting the user's workflow.
 
 ## Sub-Skills
 

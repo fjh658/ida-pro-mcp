@@ -278,7 +278,7 @@ def export_name_resource(name: Annotated[str, "Export name"]) -> dict:
 
 @resource("ida://xrefs/from/{addr}")
 @idasync
-def xrefs_from_resource(addr: Annotated[str, "Source address"]) -> list[dict]:
+def xrefs_from_resource(addr: Annotated[str, "Source address (hex or decimal, e.g. 0x401000)"]) -> list[dict]:
     """Get cross-references from address"""
     ea = parse_address(addr)
     xrefs = []

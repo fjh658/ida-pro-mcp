@@ -113,7 +113,7 @@ When analyzing multiple binaries simultaneously, just open multiple IDAs and pre
 | Tool | Description |
 |------|-------------|
 | `instance_list` | List all connected IDA instances |
-| `instance_switch` | Switch current active instance |
+| `instance_switch` | Switch default instance (prefer passing `instance_id` per-call) |
 | `instance_current` | View current instance info |
 | `instance_info` | Get detailed info for specified instance |
 

@@ -57,10 +57,10 @@ targets prevents `_collect_original_insns` from iterating billions of addresses.
 target validation passes. Otherwise, a bogus result at maturity 3 blocks the correct result at
 maturity 4. See `maturity_levels.md` → "Cross-Maturity Hazard".
 
-**Cooperative timeout**: `decompile()` is synchronous with no timeout. Set a deadline before
-calling it, check in `func()` callback entry (with `_timed_out` short-circuit to avoid
-`time.time()` overhead), and check in `_propagate()` every ~16 instructions. See
-`../../references/api_safety.md` → "Cooperative Timeout".
+**Two-layer timeout**: `decompile()` is synchronous with no timeout.
+- *Cooperative* (fast path): Set `_deadline` before calling `decompile()`, check in `func()` callback entry (with `_timed_out` short-circuit to avoid `time.time()` overhead), and in `_propagate()` every ~16 instructions.
+- *Hard cancel* (stuck-proof): Background watchdog thread calls `ida_kernwin.set_cancelled()` after timeout. The decompiler checks `callui(27)` at 150+ internal checkpoints (optimization loops, block processing) and returns `MERR_CANCELED` (-18). Clear the flag with `clr_cancelled()` after decompile returns to prevent stale cancel state. This works even when the decompiler is stuck in internal phases (CLP solver, IR transformation) that never invoke the optimizer callback.
+- *Skip list*: Record timed-out function EAs in `_g_timeout_funcs` and skip them in all subsequent passes (convergence, residual, Phase 4, Phase 5). See `../../references/api_safety.md` → "Cooperative Timeout".
 
 ---
 

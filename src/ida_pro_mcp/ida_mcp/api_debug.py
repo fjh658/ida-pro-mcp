@@ -208,7 +208,7 @@ def dbg_continue() -> str:
 @tool
 @idasync
 def dbg_run_to(
-    addr: Annotated[str, "Address"],
+    addr: Annotated[str, "Target address (hex or decimal, e.g. 0x401000)"],
 ):
     """Run to address"""
     dbg_ensure_running()
@@ -267,7 +267,7 @@ def dbg_bps():
 @tool
 @idasync
 def dbg_add_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to add breakpoints at"],
+    addrs: Annotated[list[str] | str, "Address(es) (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
 ) -> list[dict]:
     """Add breakpoints"""
     addrs = normalize_list_input(addrs)
@@ -297,7 +297,7 @@ def dbg_add_bp(
 @tool
 @idasync
 def dbg_delete_bp(
-    addrs: Annotated[list[str] | str, "Address(es) to delete breakpoints from"],
+    addrs: Annotated[list[str] | str, "Address(es) (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
 ) -> list[dict]:
     """Delete breakpoints"""
     addrs = normalize_list_input(addrs)
@@ -320,7 +320,7 @@ def dbg_delete_bp(
 @unsafe
 @tool
 @idasync
-def dbg_toggle_bp(items: list[BreakpointOp] | BreakpointOp) -> list[dict]:
+def dbg_toggle_bp(items: Annotated[list[BreakpointOp] | BreakpointOp, "{addr, enabled} object(s), e.g. {addr: '0x401000', enabled: true}"]) -> list[dict]:
     """Enable/disable breakpoints"""
 
     items = normalize_dict_list(items)
@@ -545,7 +545,7 @@ def dbg_stacktrace() -> list[dict[str, str]]:
 @unsafe
 @tool
 @idasync
-def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
+def dbg_read(regions: Annotated[list[MemoryRead] | MemoryRead, "{addr, size} object(s), e.g. {addr: '0x401000', size: 16}"]) -> list[dict]:
     """Read debug memory"""
 
     regions = normalize_dict_list(regions)
@@ -589,7 +589,7 @@ def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
 @unsafe
 @tool
 @idasync
-def dbg_write(regions: list[MemoryPatch] | MemoryPatch) -> list[dict]:
+def dbg_write(regions: Annotated[list[MemoryPatch] | MemoryPatch, "{addr, data} object(s), e.g. {addr: '0x401000', data: '90 90'}"]) -> list[dict]:
     """Write debug memory"""
 
     regions = normalize_dict_list(regions)

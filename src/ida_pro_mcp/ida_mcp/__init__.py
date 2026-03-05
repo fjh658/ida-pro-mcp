@@ -36,6 +36,7 @@ from .api_instances import (
     disconnect,
     is_connected,
     get_instance_id,
+    generate_instance_id,
     set_auto_reconnect,
 )
 
@@ -71,5 +72,6 @@ __all__ = [
     "disconnect",
     "is_connected",
     "get_instance_id",
+    "generate_instance_id",
     "set_auto_reconnect",
 ]

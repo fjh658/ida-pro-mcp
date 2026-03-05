@@ -106,6 +106,7 @@ import ida_bytes
 import ida_idaapi
 import ida_kernwin
 import ida_ua
+import ida_nalt
 import ida_idp
 import ida_funcs
 import ida_auto
@@ -136,6 +137,7 @@ DEBUG = True
 VERBOSE = False  # set True for per-block diagnostic dumps
 
 import time as _time
+import threading as _threading
 
 def _ts():
     """Current timestamp with local timezone, e.g. '2026-02-28 23:20:31.123 +0800'."""
@@ -158,6 +160,63 @@ def _get_disasm(ea):
         return _idc.GetDisasm(ea) if _idc else "???"
     except Exception:
         return "???"
+
+
+# ---------------------------------------------------------------------------
+# Standalone decompile-with-timeout  (no plugin dependencies — copy-paste OK)
+# ---------------------------------------------------------------------------
+
+from decompile_timeout import decompile_cfunc as decompile_with_timeout
+
+
+def _has_large_jump_table(f_start, f_end):
+    """Return True if the function contains a large indirect jump table.
+
+    Functions with >100-entry jump tables cause the decompiler's CLP
+    solver to run for tens of seconds.  Skipping them avoids the
+    timeout penalty (~20s per function).
+
+    Detected patterns:
+      x86_64: ``jmp qword [reg + idx*8]`` with switch_info > 100 cases
+      ARM64:  ``BR Xn`` (register-indirect jump)
+    """
+    f_size = f_end - f_start
+    if f_size > 0x40:
+        return False  # too large to be a stub
+
+    # Decode instructions in the function
+    insns = []
+    ea = f_start
+    while ea < f_end and len(insns) < 8:
+        insn = ida_ua.insn_t()
+        n = ida_ua.decode_insn(insn, ea)
+        if n == 0:
+            break
+        insns.append(insn)
+        ea += n
+
+    if len(insns) < 2 or ida_allins is None:
+        return False
+
+    if _is_arm64():
+        # ARM64: look for BR Xn at the end
+        last = insns[-1]
+        if last.itype == ida_allins.ARM_br:
+            return True
+    else:
+        # x86_64: look for JMP [reg + reg*8] or JMP [table + reg*8]
+        # as the last (or second-to-last) instruction
+        for insn in insns[-2:]:
+            if insn.itype in (ida_allins.NN_jmp, ida_allins.NN_jmpni):
+                op = insn.ops[0]
+                # Indirect jump through memory with SIB scale=8
+                if op.type in (ida_ua.o_mem, ida_ua.o_phrase, ida_ua.o_displ):
+                    # Check for switch info (IDA's own detection)
+                    si = ida_nalt.switch_info_t()
+                    if ida_nalt.get_switch_info(si, insn.ea):
+                        if si.get_jtable_size() > 100:
+                            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1353,10 +1412,11 @@ def _extend_tiny_prologue_funcs():
     This function extends those boundaries so the next decompilation
     pass can see the indirect jump and resolve it.
 
-    Returns the number of functions extended.
+    Returns ``(count, extended_eas)`` — count and set of extended EAs.
     """
     nfuncs = ida_funcs.get_func_qty()
     extended = 0
+    extended_eas = set()
     MAX_TINY = 0x40  # functions smaller than this are candidates
 
     for i in range(nfuncs):
@@ -1369,13 +1429,23 @@ def _extend_tiny_prologue_funcs():
         if f_size >= MAX_TINY:
             continue
 
+        # Skip large jump tables — extending them causes the
+        # decompiler's CLP solver to hang.
+        if _has_large_jump_table(f_start, f_end):
+            _log("  extend-tiny: 0x%X is large jump table (%d bytes), skipping"
+                 % (f_start, f_size))
+            continue
+
+        # Skip functions that already timed out in a prior pass.
+        if f_start in _g_timeout_funcs:
+            continue
+
         # Quick check: does this decompile with JUMPOUT?
-        try:
-            ida_hexrays.mark_cfunc_dirty(f_start, False)
-            cfunc = ida_hexrays.decompile(f_start)
-            if cfunc is None or 'JUMPOUT' not in str(cfunc):
-                continue
-        except Exception:
+        cfunc, _to = _decompile_with_timeout(f_start)
+        if _to or (_g_optimizer and _g_optimizer._timed_out):
+            _g_timeout_funcs.add(f_start)
+            continue
+        if cfunc is None or 'JUMPOUT' not in str(cfunc):
             continue
 
         # Scan forward from function end for the real end
@@ -1432,8 +1502,9 @@ def _extend_tiny_prologue_funcs():
         _log("  extend-tiny: 0x%X extended [0x%X-0x%X) -> [0x%X-0x%X)" %
              (f_start, f_start, f_end, f_start, new_end))
         extended += 1
+        extended_eas.add(f_start)
 
-    return extended
+    return extended, extended_eas
 
 
 def _repair_jumpout_boundaries():
@@ -1463,17 +1534,19 @@ def _repair_jumpout_boundaries():
         f_start = func.start_ea
         f_end = func.end_ea
 
+        if f_start in _g_timeout_funcs:
+            continue
+
         # Decompile and check for JUMPOUT
-        try:
-            ida_hexrays.mark_cfunc_dirty(f_start, False)
-            cfunc = ida_hexrays.decompile(f_start,
-                                          flags=ida_hexrays.DECOMP_NO_WAIT)
-            if cfunc is None:
-                continue
-            txt = str(cfunc)
-            if 'JUMPOUT' not in txt:
-                continue
-        except Exception:
+        cfunc, _to = _decompile_with_timeout(
+            f_start, flags=ida_hexrays.DECOMP_NO_WAIT)
+        if _to or (_g_optimizer and _g_optimizer._timed_out):
+            _g_timeout_funcs.add(f_start)
+            continue
+        if cfunc is None:
+            continue
+        txt = str(cfunc)
+        if 'JUMPOUT' not in txt:
             continue
 
         # Extract JUMPOUT target addresses
@@ -1569,6 +1642,16 @@ def _clean_standalone_opaque_preds():
             continue
         f_start = func.start_ea
         f_end = func.end_ea
+
+        # Skip functions in the timeout skip-list (e.g. large jump tables
+        # that cause expensive auto-analysis when their boundaries change).
+        if f_start in _g_timeout_funcs:
+            continue
+
+        # Skip large jump tables — extending their boundaries causes
+        # the decompiler's CLP solver to hang.
+        if _has_large_jump_table(f_start, f_end):
+            continue
 
         # Scan with generous range beyond the function boundary to catch
         # junk bytes that IDA left outside due to analysis failure at the
@@ -2238,6 +2321,7 @@ class CBDeobfOptimizer(ida_hexrays.optblock_t):
 # ---------------------------------------------------------------------------
 
 _g_optimizer = None   # prevent GC
+_g_timeout_funcs = set()  # EAs that timed out — skip in subsequent passes
 
 
 def cb_deobf_install():
@@ -2320,6 +2404,30 @@ def cb_deobf_is_installed():
 _g_fix_all_running = False
 
 
+def _decompile_with_timeout(ea, timeout=None, mark_dirty=True, flags=0):
+    """Plugin wrapper around :func:`decompile_with_timeout`.
+
+    Adds cooperative deadline (``_g_optimizer._deadline``) so the
+    optimizer callback can short-circuit early without waiting for
+    the hard watchdog cancel.
+    """
+    if timeout is None:
+        timeout = _g_optimizer.DECOMPILE_TIMEOUT if _g_optimizer else 0
+
+    # Cooperative timeout for the optimizer callback (fast path)
+    if _g_optimizer is not None:
+        _g_optimizer._timed_out = False
+        _g_optimizer._func_calls = 0
+        _g_optimizer._deadline = (_time.time() + timeout) if timeout > 0 else 0
+
+    try:
+        return decompile_with_timeout(ea, timeout=timeout,
+                                      mark_dirty=mark_dirty, flags=flags)
+    finally:
+        if _g_optimizer is not None:
+            _g_optimizer._deadline = 0
+
+
 def cb_deobf_fix_all():
     """Decompile ALL functions in the IDB to trigger the optimizer.
 
@@ -2343,6 +2451,7 @@ def cb_deobf_fix_all():
     resolved_before = _g_optimizer.total_resolved
     failed = 0
     skipped = 0
+    _g_timeout_funcs.clear()
 
     _g_fix_all_running = True
     _log("fix-all: batch decompiling %d functions" % nfuncs)
@@ -2361,23 +2470,27 @@ def cb_deobf_fix_all():
                 continue
 
             ea = func.start_ea
-            timeout = _g_optimizer.DECOMPILE_TIMEOUT
-            _g_optimizer._timed_out = False
-            _g_optimizer._func_calls = 0
-            _g_optimizer._deadline = (_time.time() + timeout) if timeout > 0 else 0
-            t0 = _time.time()
-            try:
-                ida_hexrays.mark_cfunc_dirty(ea, False)
-                ida_hexrays.decompile(ea)
-            except Exception:
-                failed += 1
-            finally:
-                _g_optimizer._deadline = 0
-            elapsed = _time.time() - t0
-            calls = _g_optimizer._func_calls
 
-            if _g_optimizer._timed_out:
+            # Skip large jump tables before decompiling — these have
+            # huge switch tables that cause the CLP solver to run for
+            # 17-20s before set_cancelled() takes effect.
+            if _has_large_jump_table(ea, func.end_ea):
                 skipped += 1
+                _g_timeout_funcs.add(ea)
+                _log("fix-all: func %d/%d 0x%X is large jump table, skipped"
+                     % (i, nfuncs, ea))
+                continue
+
+            t0 = _time.time()
+            cfunc, timed_out = _decompile_with_timeout(ea)
+            if cfunc is None and not timed_out:
+                failed += 1
+            elapsed = _time.time() - t0
+            calls = _g_optimizer._func_calls if _g_optimizer else 0
+
+            if timed_out or (_g_optimizer and _g_optimizer._timed_out):
+                skipped += 1
+                _g_timeout_funcs.add(ea)
                 _log("fix-all: func %d/%d 0x%X TIMEOUT after %.1fs (%d callbacks, skipped)"
                      % (i, nfuncs, ea, elapsed, calls))
             elif elapsed >= 1.0:
@@ -2418,14 +2531,13 @@ def cb_deobf_fix_all():
                     _log("  convergence fixup FAILED (0x%X): %s" %
                          (fix.ijmp_ea, str(e)))
 
-            # Let IDA finish background analysis so boundaries are final
-            ida_auto.auto_wait()
-
-            # Repair functions that auto_wait may have created with
-            # over-extended boundaries (e.g. swallowing a neighbor's
-            # prologue past a BL-to-noreturn).
-            n_rep = _repair_swallowed_prologues(extended_funcs)
-            if n_rep:
+            # NOTE: auto_wait() removed — all IDB-modifying ops (add_func,
+            # del_func) are synchronous.  Decompiler reads bytes directly.
+            # Pending auto-analysis drains after script returns to event loop.
+            # _repair_swallowed_prologues also skipped — it only fixes issues
+            # caused by auto_wait extending boundaries beyond what we set.
+            n_rep = 0
+            if False:  # was: _repair_swallowed_prologues(extended_funcs)
                 _log("fix-all: convergence pass %d: repaired %d "
                      "boundary conflict(s)" % (_pass, n_rep))
 
@@ -2436,21 +2548,14 @@ def cb_deobf_fix_all():
                         break
                 except AttributeError:
                     pass
+                if ea in _g_timeout_funcs:
+                    continue
                 func = ida_funcs.get_func(ea)
                 if func is None:
                     continue
-                timeout = _g_optimizer.DECOMPILE_TIMEOUT
-                _g_optimizer._timed_out = False
-                _g_optimizer._func_calls = 0
-                _g_optimizer._deadline = (
-                    (_time.time() + timeout) if timeout > 0 else 0)
-                try:
-                    ida_hexrays.mark_cfunc_dirty(ea, False)
-                    ida_hexrays.decompile(ea)
-                except Exception:
-                    pass
-                finally:
-                    _g_optimizer._deadline = 0
+                cfunc, _to = _decompile_with_timeout(ea)
+                if _to or (_g_optimizer and _g_optimizer._timed_out):
+                    _g_timeout_funcs.add(ea)
 
             _log("fix-all: convergence pass %d done" % _pass)
 
@@ -2480,39 +2585,26 @@ def cb_deobf_fix_all():
             ida_kernwin.replace_wait_box(
                 "CB Deobf: residual fix pass %d..." % _rpass)
 
-            n_ext = _extend_tiny_prologue_funcs()
+            n_ext, ext_eas = _extend_tiny_prologue_funcs()
             if n_ext == 0:
                 break
 
             _log("fix-all: residual pass %d: extended %d tiny-prologue "
                  "function(s)" % (_rpass, n_ext))
-            ida_auto.auto_wait()
+            # auto_wait() removed
 
-            # Re-decompile ALL functions to catch newly-exposed branches.
-            # (The extended functions may reveal ijmps that patch binary
-            # and produce fixups for other functions.)
-            nfuncs2 = ida_funcs.get_func_qty()
-            for i in range(nfuncs2):
+            # Re-decompile only the extended functions (not ALL).
+            for ea in sorted(ext_eas):
                 try:
                     if ida_kernwin.user_cancelled():
                         break
                 except AttributeError:
                     pass
-                func = ida_funcs.getn_func(i)
-                if func is None:
+                if ea in _g_timeout_funcs:
                     continue
-                timeout = _g_optimizer.DECOMPILE_TIMEOUT
-                _g_optimizer._timed_out = False
-                _g_optimizer._func_calls = 0
-                _g_optimizer._deadline = (
-                    (_time.time() + timeout) if timeout > 0 else 0)
-                try:
-                    ida_hexrays.mark_cfunc_dirty(func.start_ea, False)
-                    ida_hexrays.decompile(func.start_ea)
-                except Exception:
-                    pass
-                finally:
-                    _g_optimizer._deadline = 0
+                cfunc, _to = _decompile_with_timeout(ea)
+                if _to or (_g_optimizer and _g_optimizer._timed_out):
+                    _g_timeout_funcs.add(ea)
 
             # Drain any new fixups
             if _g_fixup_queue:
@@ -2524,7 +2616,7 @@ def cb_deobf_fix_all():
                         _apply_single_fixup(fix)
                     except Exception:
                         pass
-                ida_auto.auto_wait()
+                # auto_wait() removed
                 _log("fix-all: residual pass %d: %d fixup(s) applied" %
                      (_rpass, n_fix))
 
@@ -2552,7 +2644,11 @@ def cb_deobf_fix_all():
 
             _log("fix-all: Phase 4 pass %d: cleaned %d opaque pred(s) "
                  "in %d function(s)" % (_opass, op_count, len(op_affected)))
-            ida_auto.auto_wait()
+            # NOTE: auto_wait() removed — decompiler reads bytes directly and
+            # does not need IDA auto-analysis to complete.  Tested: all
+            # affected functions decompile correctly without auto_wait().
+            # The previous auto_wait() here blocked for 7+ minutes on x86_64
+            # binaries due to cascading re-analysis from 25+ function rebuilds.
 
             # Re-decompile affected functions — newly-visible code may
             # contain computed branches the optimizer can now resolve.
@@ -2562,21 +2658,14 @@ def cb_deobf_fix_all():
                         break
                 except AttributeError:
                     pass
+                if ea in _g_timeout_funcs:
+                    continue
                 func = ida_funcs.get_func(ea)
                 if func is None:
                     continue
-                timeout = _g_optimizer.DECOMPILE_TIMEOUT
-                _g_optimizer._timed_out = False
-                _g_optimizer._func_calls = 0
-                _g_optimizer._deadline = (
-                    (_time.time() + timeout) if timeout > 0 else 0)
-                try:
-                    ida_hexrays.mark_cfunc_dirty(ea, False)
-                    ida_hexrays.decompile(ea)
-                except Exception:
-                    pass
-                finally:
-                    _g_optimizer._deadline = 0
+                cfunc, _to = _decompile_with_timeout(ea)
+                if _to or (_g_optimizer and _g_optimizer._timed_out):
+                    _g_timeout_funcs.add(ea)
 
             # Drain any new fixups from the optimizer
             if _g_fixup_queue:
@@ -2588,7 +2677,7 @@ def cb_deobf_fix_all():
                         _apply_single_fixup(fix)
                     except Exception:
                         pass
-                ida_auto.auto_wait()
+                # auto_wait() removed — decompiler doesn't need it
                 _log("fix-all: Phase 4 pass %d: %d new fixup(s) applied"
                      % (_opass, n_fix))
 
@@ -2610,21 +2699,15 @@ def cb_deobf_fix_all():
                 break
             _log("fix-all: Phase 5 pass %d: repaired %d boundary(ies)"
                  % (_bpass, br_count))
-            ida_auto.auto_wait()
+            # NOTE: auto_wait() removed — same as Phase 4, decompiler
+            # reads bytes directly. Pending analysis drains asynchronously.
             # Re-decompile repaired functions
             for ea in sorted(br_set):
-                timeout = _g_optimizer.DECOMPILE_TIMEOUT
-                _g_optimizer._timed_out = False
-                _g_optimizer._func_calls = 0
-                _g_optimizer._deadline = (
-                    (_time.time() + timeout) if timeout > 0 else 0)
-                try:
-                    ida_hexrays.mark_cfunc_dirty(ea, False)
-                    ida_hexrays.decompile(ea)
-                except Exception:
-                    pass
-                finally:
-                    _g_optimizer._deadline = 0
+                if ea in _g_timeout_funcs:
+                    continue
+                cfunc, _to = _decompile_with_timeout(ea)
+                if _to or (_g_optimizer and _g_optimizer._timed_out):
+                    _g_timeout_funcs.add(ea)
             # Drain any new fixups from optimizer
             if _g_fixup_queue:
                 n_fix = len(_g_fixup_queue)
@@ -2635,7 +2718,7 @@ def cb_deobf_fix_all():
                         _apply_single_fixup(fix)
                     except Exception:
                         pass
-                ida_auto.auto_wait()
+                # auto_wait() removed — same reason as above
                 _log("fix-all: Phase 5 pass %d: %d fixup(s) applied"
                      % (_bpass, n_fix))
             _log("fix-all: Phase 5 pass %d done" % _bpass)
@@ -2645,6 +2728,10 @@ def cb_deobf_fix_all():
         _g_fix_all_running = False
 
     new_resolved = _g_optimizer.total_resolved - resolved_before
+    if _g_timeout_funcs:
+        _log("fix-all: %d function(s) in timeout skip-list: %s"
+             % (len(_g_timeout_funcs),
+                ", ".join("0x%X" % a for a in sorted(_g_timeout_funcs))))
     msg = ("Fix-all complete: %d functions scanned, "
            "%d resolved, %d failed, %d timeout" % (nfuncs, new_resolved, failed, skipped))
     _log(msg)
@@ -2875,21 +2962,17 @@ class CBDeobfPlugin(ida_idaapi.plugin_t):
     help = PLUGIN_HELP
 
     def init(self):
-        """Called once when IDA loads the plugin (startup or first load).
-        Return PLUGIN_KEEP to stay resident, PLUGIN_SKIP to disable.
+        """Called once when IDA loads the plugin.
 
-        Registers all action handlers and context-menu hooks so that
-        'CB Deobf' submenu is available even before the optimizer is
-        toggled on.
+        Always registers menus and prints the banner regardless of
+        whether Hex-Rays is available yet — the decompiler availability
+        is checked at actual use time (run / menu callbacks).
         """
-        if not ida_hexrays.init_hexrays_plugin():
-            print("[cb_deobf_mc] Hex-Rays not available -- plugin disabled")
-            return ida_idaapi.PLUGIN_SKIP
-
         _register_menus()
-        print("[cb_deobf_mc] %s v%s loaded.  Press %s to toggle, or use "
-              "Edit > Plugins / right-click > CB Deobf menu." %
+        print("-" * 79)
+        print("[cb_deobf] %s v%s loaded.  Hotkey: %s" %
               (PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_HOTKEY))
+        print("-" * 79)
         return ida_idaapi.PLUGIN_KEEP
 
     def run(self, arg):

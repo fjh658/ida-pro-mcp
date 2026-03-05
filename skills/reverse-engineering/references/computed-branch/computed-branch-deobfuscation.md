@@ -51,8 +51,8 @@ This will:
 1. Install a Hex-Rays `optblock_t` optimizer that intercepts `m_ijmp` instructions.
 2. Perform constant propagation to resolve each indirect jump target.
 3. Validate targets (64KB distance check) and patch the binary: replace indirect jumps with direct jumps, NOP junk bytes and opaque predicates.
-4. Rebuild function boundaries via deferred fixups (timer-based, zero `auto_wait`).
-5. Batch-decompile all functions with a progress dialog (cancellable, 3s per-function timeout).
+4. Rebuild function boundaries via deferred fixups (timer-based, no `auto_wait`).
+5. Batch-decompile all functions with a progress dialog (cancellable, 3s per-function timeout with hard cancel via `set_cancelled()`).
 
 ### What It Does (Six Phases)
 
@@ -62,7 +62,8 @@ Fix All (`cb_deobf_fix_all()`) runs six phases in sequence, each convergent (rep
 - Detects `m_ijmp` at block tail.
 - Multi-level BFS predecessor traversal (depth limit 16) for constant propagation.
 - Tracks micro-registers, stack variables, and stack-address registers.
-- Cooperative timeout: `DECOMPILE_TIMEOUT` (default 3s) per function; `_propagate()` checks deadline every 16 instructions. `func()` callback short-circuits when timed out (zero `time.time()` overhead).
+- Two-layer timeout: (a) Cooperative timeout in `func()` callback (checks `_deadline`, short-circuits with zero `time.time()` overhead) + `_propagate()` checks every 16 instructions; (b) Hard timeout via background watchdog thread calling `ida_kernwin.set_cancelled()` — works even when decompiler is stuck in internal phases (CLP solver, IR transformation) that never invoke the optimizer callback. `DECOMPILE_TIMEOUT` default 3s.
+- Timeout skip list (`_g_timeout_funcs`): functions that time out in any pass are recorded and skipped in all subsequent passes (convergence, residual, Phase 4, Phase 5).
 - Replaces resolved `m_ijmp` with `m_goto`.
 
 **Phase 2 — Binary Patching** (inside optimizer callback):
@@ -81,9 +82,10 @@ Fix All (`cb_deobf_fix_all()`) runs six phases in sequence, each convergent (rep
 
 **Phase 3.5 — Residual Fix Loop** (`_extend_tiny_prologue_funcs`):
 - Scans all functions smaller than 0x40 bytes that decompile with JUMPOUT.
+- **VM dispatch stub detection** (`_is_vm_dispatch_stub`): Skips tiny functions that are VM threaded-dispatch stubs (x86_64: `lea + jmp [table]` with >100 switch cases; ARM64: `BR Xn`). Extending these absorbs the entire VM handler table and causes the decompiler to hang (e.g. 414-entry jump table spanning 144KB → 390s per function).
 - Extends boundaries by scanning forward for the real function end (RET or next prologue).
 - Absorbs adjacent functions when a JUMPOUT target from the tiny function lands inside the adjacent function body (JUMPOUT-target-based heuristic — more precise than xref-based).
-- Re-decompiles all functions after extension to catch newly-exposed computed branches.
+- Re-decompiles only the extended functions (not all functions) to catch newly-exposed computed branches. Previously timed-out functions are skipped via `_g_timeout_funcs`.
 - Up to 5 convergence passes.
 
 **Phase 4 — Standalone Opaque Predicate Cleaning** (`_clean_standalone_opaque_preds`):
@@ -94,7 +96,7 @@ Fix All (`cb_deobf_fix_all()`) runs six phases in sequence, each convergent (rep
 - Up to 3 convergence passes.
 
 **Phase 5 — Boundary Repair** (`_repair_jumpout_boundaries`):
-- Final sweep: decompiles all functions and parses JUMPOUT targets from pseudocode.
+- Final sweep: decompiles all functions (skipping `_g_timeout_funcs`) and parses JUMPOUT targets from pseudocode.
 - For targets at/past function end not inside another function: extends boundary via `_scan_for_func_end`.
 - For targets inside an adjacent function: absorbs the adjacent function if its only inbound xrefs come from the current function.
 - Up to 3 convergence passes.
@@ -143,6 +145,31 @@ When deeper microcode work is needed (custom propagation, new opcode support, et
 - **`../../idapython/microcode/references/constant_propagation.md`** — Complete PropState engine reference.
 - **`../../idapython/microcode/references/deobfuscation_patterns.md`** — Obfuscation pattern catalog and microcode solutions.
 
+### `decompile_with_timeout()` — via decompile_timeout plugin
+
+The script imports `decompile_cfunc` from the `decompile_timeout` plugin (line 169), which provides hardware-level cancel hooks into the decompiler's tight loops (nway analysis, CLP presolve).
+
+```python
+from decompile_timeout import decompile_cfunc as decompile_with_timeout
+cfunc, timed_out = decompile_with_timeout(ea, timeout=3.0)
+```
+
+- Requires `decompile_timeout.dylib` + `decompile_timeout.py` installed in `~/.idapro/plugins/`
+- Hooks CALL/BL sites in the decompiler's hot loops, checking `cancel_flag` at each iteration
+- Sub-second cancel latency, including CLP presolve (previously ~17s uninterruptible)
+- See `decompile_timeout/plans/decompile_timeout.md` for full architecture
+
+### Plugin Installation
+
+The script doubles as an IDA plugin. On startup it prints a banner and registers menus:
+```
+-------------------------------------------------------------------------------
+[cb_deobf] Computed-Branch Deobfuscator v0.0.1 loaded.  Hotkey: Ctrl-Shift-A
+-------------------------------------------------------------------------------
+```
+
+Install via `--install --force`, menus appear under Edit > CB Deobf and right-click context menus.
+
 ## Fallback When `py_eval` Is Unavailable
 
 If unsafe tools are disabled:
@@ -164,6 +191,6 @@ ARM64 achieves 100% resolution. x86_64 residuals are hard cases requiring enhanc
 
 - Always verify with `decompile` after the script runs — zero JUMPOUT is the target.
 - The script is idempotent (`_patched_addrs` prevents double-patching; marked only after distance validation).
-- Fix All completes in ~10 seconds for ~490 functions; slow functions auto-skipped via cooperative timeout.
+- Fix All completes in ~10 seconds for ~490 functions (simple binaries); slow functions auto-skipped via two-layer timeout (cooperative + hard cancel) and `_g_timeout_funcs` skip list across all passes.
 - Keep sample-specific addresses out of shared docs/scripts.
 - Document any manual residual fixes for reproducibility.

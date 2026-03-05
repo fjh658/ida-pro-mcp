@@ -9,11 +9,15 @@ Note: These APIs run only on the IDA side for MCP server communication.
 """
 
 import json
+import os
+import socket
 import threading
 import time
 import urllib.request
 import urllib.error
 from typing import Callable, Optional
+
+from .zeromcp.jsonrpc import mcp_log
 
 # ============================================================================
 # Configuration
@@ -72,7 +76,7 @@ def _http_post(url: str, data: dict, timeout: float = 3.0, silent: bool = False)
             return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
         if not silent:
-            print(f"[MCP] HTTP POST failed {url}: {e}")
+            mcp_log(f"HTTP POST failed {url}: {e}")
         return None
 
 
@@ -87,11 +91,34 @@ def _parse_sse_line(line: str) -> tuple[Optional[str], Optional[str]]:
 
 
 # ============================================================================
+# Instance ID generation
+# ============================================================================
+
+def _get_lan_ip() -> str:
+    """Get LAN IP address. Returns 127.0.0.1 if no network available."""
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        if s:
+            s.close()
+
+
+def generate_instance_id() -> str:
+    """Generate instance ID: ida-{PID}-[{IP}] to avoid collisions across machines."""
+    return f"ida-{os.getpid()}-[{_get_lan_ip()}]"
+
+
+# ============================================================================
 # Connection management
 # ============================================================================
 
 def connect_to_server(
-    instance_id: str,
+    instance_id: str = "",
     instance_type: str = "gui",
     name: str = "",
     binary_path: str = "",
@@ -115,6 +142,9 @@ def connect_to_server(
     """
     global _server_url, _client_id, _instance_id, _connected, _running
     global _sse_thread, _on_mcp_request, _last_connect_params, _reconnect_attempt
+
+    if not instance_id:
+        instance_id = generate_instance_id()
 
     with _connect_lock:
         # Save connection parameters for reconnection
@@ -149,7 +179,7 @@ def connect_to_server(
         result = _http_post(f"{_server_url}/register", register_data, silent=silent)
         if not result or not result.get("success"):
             if not silent:
-                print("[MCP] Connection failed, waiting for Cursor to start for automatic reconnect...")
+                mcp_log("Connection failed, waiting for Cursor to start for automatic reconnect...")
             _schedule_reconnect()
             return False
 
@@ -204,7 +234,7 @@ def _sse_loop():
     
     except Exception as e:
         if _running:
-            print(f"[MCP] SSE connection dropped: {e}")
+            mcp_log(f"SSE connection dropped: {e}")
     
     finally:
         _connected = False
@@ -238,7 +268,7 @@ def _handle_sse_event(event_type: str, event_data: str):
         pass  # Heartbeat, no handling needed
     
     elif event_type == "connected":
-        print("[MCP] SSE connected")
+        mcp_log("SSE connected")
 
 
 def _send_response(request_id: str, response: dict):
@@ -296,7 +326,7 @@ def _try_reconnect():
     )
     
     if success:
-        print(f"[MCP] Reconnected successfully ({params['name']})")
+        mcp_log(f"Reconnected successfully ({params['name']})")
 
 
 def set_auto_reconnect(enabled: bool):

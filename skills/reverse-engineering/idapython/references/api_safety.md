@@ -166,7 +166,7 @@ finally:
 2. **Prefer batch fixup queue over per-fixup timers** — avoids timer storms
 3. **Prefer `mblock_t.make_nop(insn)` over manual NOP** — it correctly marks lists dirty
 4. **After modifying microcode, call `mba.verify(True)`** in debug builds to catch issues
-5. **Use `_instance` parameter with MCP** — never switch active IDA instances
+5. **Use `instance_id` parameter with MCP** — prefer passing it directly over calling `instance_switch`
 6. **`set_cmt()` placed before `del_items()` will be lost** — always set comments last
 7. **Use `DELIT_SIMPLE` flag with `del_items()`** — the default `flag=0` may not fully clear
    IDB item markers, causing subsequent `create_insn()` to fail with length 0. Always use

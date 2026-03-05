@@ -29,7 +29,7 @@ from .utils import (
 
 @tool
 @idasync
-def get_bytes(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
+def get_bytes(regions: Annotated[list[MemoryRead] | MemoryRead, "{addr, size} object(s), e.g. {addr: '0x401000', size: 16}"]) -> list[dict]:
     """Read bytes from memory addresses"""
     if isinstance(regions, dict):
         regions = [regions]
@@ -90,7 +90,7 @@ def _parse_int_value(text: str, signed: bool, bits: int) -> int:
 def get_int(
     queries: Annotated[
         list[IntRead] | IntRead,
-        "Integer read requests (ty, addr). ty: i8/u64/i16le/i16be/etc",
+        "{addr, ty} object(s), e.g. {addr: '0x401000', ty: 'u32'}",
     ],
 ) -> list[dict]:
     """Read integer values from memory addresses"""
@@ -123,7 +123,7 @@ def get_int(
 @tool
 @idasync
 def get_string(
-    addrs: Annotated[list[str] | str, "Addresses to read strings from"],
+    addrs: Annotated[list[str] | str, "Addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"],
 ) -> list[dict]:
     """Read strings from memory addresses"""
     addrs = normalize_list_input(addrs)
@@ -185,7 +185,7 @@ def get_global_variable_value_internal(ea: int) -> str:
 @idasync
 def get_global_value(
     queries: Annotated[
-        list[str] | str, "Global variable addresses or names to read values from"
+        list[str] | str, "Address (hex or decimal, e.g. 0x401000) or symbol name. Comma-separated string or list"
     ],
 ) -> list[dict]:
     """Read global variable values by address or name
@@ -229,7 +229,7 @@ def get_global_value(
 
 @tool
 @idasync
-def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
+def patch(patches: Annotated[list[MemoryPatch] | MemoryPatch, "{addr, data} object(s), e.g. {addr: '0x401000', data: '90 90 90'}"]) -> list[dict]:
     """Patch bytes at memory addresses with hex data"""
     if isinstance(patches, dict):
         patches = [patches]
@@ -257,7 +257,7 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
 def put_int(
     items: Annotated[
         list[IntWrite] | IntWrite,
-        "Integer write requests (ty, addr, value). value is a string; supports 0x.. and negatives",
+        "{addr, ty, value} object(s), e.g. {addr: '0x401000', ty: 'u32', value: '0xff'}",
     ],
 ) -> list[dict]:
     """Write integer values to memory addresses"""

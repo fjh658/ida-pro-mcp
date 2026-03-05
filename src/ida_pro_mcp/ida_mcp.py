@@ -13,6 +13,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from . import ida_mcp
+    from .ida_mcp.zeromcp.jsonrpc import mcp_log
+else:
+    from ida_mcp.zeromcp.jsonrpc import mcp_log
 
 
 def unload_package(package_name: str):
@@ -26,13 +29,8 @@ def unload_package(package_name: str):
         del sys.modules[mod_name]
 
 
-def _generate_instance_id() -> str:
-    """Generate instance ID based on process ID"""
-    return f"ida-{os.getpid()}"
-
-
 def _get_current_binary_path() -> str:
-    """Get the path of the currently open binary file"""
+    """Get the path of the currently open binary file."""
     try:
         return idc.get_input_file_path() or ""
     except Exception:
@@ -108,7 +106,7 @@ class MCP(idaapi.plugin_t):
         """Try to connect to MCP server (runs in background thread, non-blocking UI)"""
         if self._connecting:
             if not silent:
-                print("[MCP] Connection in progress, please wait...")
+                mcp_log("Connection in progress, please wait...")
             return
         
         if self._connected:
@@ -139,23 +137,23 @@ class MCP(idaapi.plugin_t):
         set_auto_reconnect(True)
         self._mcp_server = MCP_SERVER
 
-        instance_id = _generate_instance_id()
         binary_path = _get_current_binary_path()
         binary_name = _get_current_binary_name()
         arch_info = _get_arch_info()
 
         def handle_mcp_request(request: dict) -> dict:
-            """Handle MCP requests from the server"""
+            """Handle MCP requests from the server (broker).
+            Enable all extensions since access control is enforced by the server proxy."""
+            setattr(MCP_SERVER._enabled_extensions, "data", set(MCP_SERVER._extensions_registry.keys()))
             return MCP_SERVER.registry.dispatch(request)
 
         if not silent:
-            print("[MCP] Connecting to MCP server...")
+            mcp_log("Connecting to MCP server...")
         
         def do_connect():
             """Execute connection in background thread"""
             try:
                 success = connect_to_server(
-                    instance_id=instance_id,
                     instance_type="gui",
                     name=binary_name or f"IDA-{os.getpid()}",
                     binary_path=binary_path,
@@ -168,19 +166,19 @@ class MCP(idaapi.plugin_t):
                     self._connecting = False
                     if success:
                         self._connected = True
-                        print(f"[MCP] Connected ({binary_name or 'IDA'})")
+                        mcp_log(f"Connected ({binary_name or 'IDA'})")
                     else:
                         if silent:
-                            print("[MCP] Auto-connect failed, press Ctrl+Alt+M to retry manually")
+                            mcp_log("Auto-connect failed, press Ctrl+Alt+M to retry manually")
                         else:
-                            print("[MCP] Connection failed, please make sure Cursor is running")
+                            mcp_log("Connection failed, please make sure Cursor is running")
                     return -1  # Do not repeat
                 
                 idaapi.execute_sync(lambda: update_status(), idaapi.MFF_WRITE)
             except Exception as e:
                 def report_error():
                     self._connecting = False
-                    print(f"[MCP] Connection error: {e}")
+                    mcp_log(f"Connection error: {e}")
                     return -1
                 idaapi.execute_sync(lambda: report_error(), idaapi.MFF_WRITE)
         

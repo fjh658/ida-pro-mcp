@@ -1,3 +1,5 @@
+from typing import Annotated
+
 import idaapi
 import idautils
 import idc
@@ -38,7 +40,7 @@ from .utils import (
 
 @tool
 @idasync
-def set_comments(items: list[CommentOp] | CommentOp):
+def set_comments(items: Annotated[list[CommentOp] | CommentOp, "{addr, comment} object(s), e.g. {addr: '0x401000', comment: 'init code'}. Empty comment clears it"]):
     """Set comments at addresses (both disassembly and decompiler views)"""
     if isinstance(items, dict):
         items = [items]
@@ -120,7 +122,7 @@ def set_comments(items: list[CommentOp] | CommentOp):
 
 @tool
 @idasync
-def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
+def patch_asm(items: Annotated[list[AsmPatchOp] | AsmPatchOp, "{addr, asm} object(s), e.g. {addr: '0x401000', asm: 'nop; nop'}"]) -> list[dict]:
     """Patch assembly instructions at addresses"""
     if isinstance(items, dict):
         items = [items]
@@ -162,7 +164,7 @@ def patch_asm(items: list[AsmPatchOp] | AsmPatchOp) -> list[dict]:
 
 @tool
 @idasync
-def rename(batch: RenameBatch) -> dict:
+def rename(batch: Annotated[RenameBatch, "e.g. {func: [{addr: '0x401000', name: 'main'}], data: [{old: 'dword_X', new: 'g_count'}]}. Keys: func, data, local, stack"]) -> dict:
     """Unified rename operation for functions, globals, locals, and stack variables"""
 
     def _normalize_items(items):
@@ -418,7 +420,7 @@ def rename(batch: RenameBatch) -> dict:
 
 @tool
 @idasync
-def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
+def define_func(items: Annotated[list[DefineOp] | DefineOp, "{addr, end?} object(s), e.g. {addr: '0x401000'}"]) -> list[dict]:
     """Define function(s) at address(es). IDA auto-determines bounds unless end address specified."""
     if isinstance(items, dict):
         items = [items]
@@ -471,7 +473,7 @@ def define_func(items: list[DefineOp] | DefineOp) -> list[dict]:
 
 @tool
 @idasync
-def define_code(items: list[DefineOp] | DefineOp) -> list[dict]:
+def define_code(items: Annotated[list[DefineOp] | DefineOp, "{addr} object(s), e.g. {addr: '0x401000'}"]) -> list[dict]:
     """Convert bytes to code instruction(s) at address(es)."""
     if isinstance(items, dict):
         items = [items]
@@ -503,7 +505,7 @@ def define_code(items: list[DefineOp] | DefineOp) -> list[dict]:
 
 @tool
 @idasync
-def undefine(items: list[UndefineOp] | UndefineOp) -> list[dict]:
+def undefine(items: Annotated[list[UndefineOp] | UndefineOp, "{addr, end?, size?} object(s), e.g. {addr: '0x401000', size: 4}. Default: 1 byte"]) -> list[dict]:
     """Undefine item(s) at address(es), converting back to raw bytes."""
     if isinstance(items, dict):
         items = [items]

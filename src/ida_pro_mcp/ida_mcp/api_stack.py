@@ -33,7 +33,7 @@ from .utils import (
 
 @tool
 @idasync
-def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
+def stack_frame(addrs: Annotated[list[str] | str, "Function addresses (hex or decimal, e.g. 0x401000). Comma-separated string or list"]) -> list[dict]:
     """Get stack vars"""
     addrs = normalize_list_input(addrs)
     results = []
@@ -52,7 +52,7 @@ def stack_frame(addrs: Annotated[list[str] | str, "Address(es)"]) -> list[dict]:
 @tool
 @idasync
 def declare_stack(
-    items: list[StackVarDecl] | StackVarDecl,
+    items: Annotated[list[StackVarDecl] | StackVarDecl, "{addr, offset, name, ty} object(s), e.g. {addr: '0x401000', offset: '0x10', name: 'buf', ty: 'char [256]'}"],
 ):
     """Create stack vars"""
     items = normalize_dict_list(items)
@@ -96,7 +96,7 @@ def declare_stack(
 @tool
 @idasync
 def delete_stack(
-    items: list[StackVarDelete] | StackVarDelete,
+    items: Annotated[list[StackVarDelete] | StackVarDelete, "{addr, name} object(s), e.g. {addr: '0x401000', name: 'buf'}"],
 ):
     """Delete stack vars"""
 

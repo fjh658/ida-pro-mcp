@@ -167,8 +167,8 @@ Analysis reports should include:
 
 - **Number conversion**: Always use the `int_convert` tool, never manually convert hex/dec
 - **Address format**: Use `0x` prefix for addresses
-- **Multi-instance**: Use `instance_list` to view connected IDAs, `instance_switch` to switch; or pass `_instance` parameter directly in any tool call to target a specific instance without switching. Resources also support `?instance=<id>` query parameter (e.g. `ida://idb/segments?instance=ida-86893`)
-- **Timeout handling**: Decompiling large functions may be slow, be patient
+- **Multi-instance**: Use `instance_list` to view connected IDAs; pass `instance_id` parameter directly in any tool call to target a specific instance (preferred — enables parallel calls across instances), or use `instance_switch` as a convenience shortcut to change the default target. Resources also support `?instance_id=<id>` query parameter (e.g. `ida://idb/segments?instance_id=ida-86893`). Supports cross-machine collaboration — instance IDs include LAN IP (e.g. `ida-12345-[192.168.1.10]`), remote IDA instances connect to the MCP server via SSE with auto-reconnect.
+- **Timeout handling**: Install the `decompile_timeout` plugin (`~/.idapro/plugins/`) for automatic timeout on stuck decompilations. Python: `from decompile_timeout import decompile_with_timeout; code, err = decompile_with_timeout(ea, 10.0)`. Without the plugin, decompiling large functions may hang indefinitely.
 - **Disasm vs Decompile**: Use `disasm` when decompilation fails, when exact instruction details matter, or for analyzing obfuscated code; use `decompile` for understanding high-level logic
 - **Call graph depth**: Use `callgraph` with appropriate `max_depth` to avoid overwhelming output; start shallow (depth 2-3) then drill deeper as needed
 

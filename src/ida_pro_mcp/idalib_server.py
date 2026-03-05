@@ -346,11 +346,16 @@ def main():
     signal.signal(signal.SIGINT, cleanup_and_exit)
     signal.signal(signal.SIGTERM, cleanup_and_exit)
 
+    # Enable unsafe extensions if --unsafe flag is set
+    if args.unsafe:
+        MCP_SERVER.default_extensions.add("unsafe")
+        logger.info("Unsafe tools enabled")
+
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread (this one) does not fake any
     # work from @idasync, so we deadlock.
     logger.info(f"MCP service started: http://{args.host}:{args.port}/mcp")
-    
+
     MCP_SERVER.serve(host=args.host, port=args.port, background=False)
 
 
