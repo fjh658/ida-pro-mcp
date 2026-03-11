@@ -1,5 +1,7 @@
+import collections
 import json
 import os
+import threading
 from typing import Any, Optional
 from .zeromcp import McpRpcRegistry, McpServer, McpToolError, McpHttpRequestHandler
 
@@ -13,7 +15,8 @@ MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
 
 OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
-_output_cache: dict[str, Any] = {}
+_output_cache: collections.OrderedDict[str, Any] = collections.OrderedDict()
+_output_cache_lock = threading.Lock()
 from .api_instances import DEFAULT_SERVER_URL
 _download_base_url: str = os.environ.get("IDA_MCP_URL", DEFAULT_SERVER_URL)
 _instance_id: str = ""
@@ -70,10 +73,17 @@ def _truncate_value(value: Any, depth: int = 0) -> Any:
 
 
 def _add_download_info(result: Any, output_id: str, total_chars: int) -> Any:
-    if _instance_id:
-        download_url = f"{_download_base_url}/output/{_instance_id}/{output_id}.json"
+    # Use 127.0.0.1 for download URL since HTTP server binds to localhost only.
+    import re as _re
+    _port_match = _re.search(r":(\d+)$", _download_base_url)
+    _port = _port_match.group(1) if _port_match else "13337"
+    _local_base = f"http://127.0.0.1:{_port}"
+    from urllib.parse import quote
+    _safe_id = quote(_instance_id, safe="") if _instance_id else ""
+    if _safe_id:
+        download_url = f"{_local_base}/output/{_safe_id}/{output_id}.json"
     else:
-        download_url = f"{_download_base_url}/output/{output_id}.json"
+        download_url = f"{_local_base}/output/{output_id}.json"
     info = {
         "_output_truncated": True,
         "_total_chars": total_chars,
@@ -97,14 +107,20 @@ def _add_download_info(result: Any, output_id: str, total_chars: int) -> Any:
 
 
 def get_cached_output(output_id: str) -> Optional[Any]:
-    return _output_cache.get(output_id)
+    with _output_cache_lock:
+        value = _output_cache.get(output_id)
+        if value is not None:
+            _output_cache.move_to_end(output_id)
+        return value
 
 
 def _cache_output(output_id: str, data: Any) -> None:
-    if len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
-        oldest_key = next(iter(_output_cache))
-        del _output_cache[oldest_key]
-    _output_cache[output_id] = data
+    with _output_cache_lock:
+        if output_id in _output_cache:
+            _output_cache.move_to_end(output_id)
+        elif len(_output_cache) >= OUTPUT_CACHE_MAX_SIZE:
+            _output_cache.popitem(last=False)
+        _output_cache[output_id] = data
 
 
 def _install_tools_call_patch() -> None:
