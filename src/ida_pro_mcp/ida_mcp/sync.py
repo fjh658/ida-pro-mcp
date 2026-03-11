@@ -3,6 +3,7 @@ import queue
 import functools
 import os
 import sys
+import threading
 import time
 import idaapi
 import idc
@@ -53,21 +54,40 @@ def _get_tool_timeout_seconds() -> float:
 call_stack = queue.LifoQueue()
 
 
-def _sync_wrapper(ff):
+def _sync_wrapper(ff, dispatch_timeout=None):
     """Call a function ff on IDA main thread with batch mode enabled.
-    
+
     Batch mode must be set and restored on the IDA main thread; otherwise,
     global IDA state can become inconsistent and affect user interactions
     (for example, the G-key jump dialog).
+
+    execute_sync is run in a daemon thread so the caller can time out
+    instead of blocking forever when the main thread is occupied by a
+    modal dialog or long-running operation (#217).
+
+    On timeout, a cancelled flag is set so the stale callback becomes a
+    no-op when the main thread eventually picks it up — this prevents
+    unintended side effects (e.g. a rename/patch executing after the
+    caller already reported failure) and frees the daemon thread sooner.
     """
 
+    if dispatch_timeout is None:
+        dispatch_timeout = _get_tool_timeout_seconds() + 10.0
+
     res_container = queue.Queue()
+    cancelled = threading.Event()
 
     def runned():
+        # If the caller already timed out, skip execution to avoid
+        # stale side effects and free the daemon thread sooner.
+        if cancelled.is_set():
+            return
+
         if not call_stack.empty():
             last_func_name = call_stack.get()
             error_str = f"Call stack is not empty while calling the function {ff.__name__} from {last_func_name}"
-            raise IDASyncError(error_str)
+            res_container.put(IDASyncError(error_str))
+            return
 
         call_stack.put((ff.__name__))
         # Enable batch mode on the IDA main thread to avoid interactive dialogs from MCP tools
@@ -81,8 +101,24 @@ def _sync_wrapper(ff):
             idc.batch(old_batch)
             call_stack.get()
 
-    idaapi.execute_sync(runned, idaapi.MFF_WRITE)
-    res = res_container.get()
+    # Run execute_sync in a daemon thread to avoid blocking forever
+    # when the main thread is occupied by a modal dialog (#217).
+    t = threading.Thread(
+        target=lambda: idaapi.execute_sync(runned, idaapi.MFF_WRITE),
+        daemon=True,
+    )
+    t.start()
+
+    try:
+        res = res_container.get(timeout=dispatch_timeout)
+    except queue.Empty:
+        # Mark as cancelled so the stale callback is skipped when the
+        # main thread eventually picks it up (#217).
+        cancelled.set()
+        raise IDAError(
+            "Request timed out waiting for IDA main thread. "
+            "Please dismiss any open dialogs in IDA."
+        )
     if isinstance(res, Exception):
         raise res
     return res
@@ -109,6 +145,12 @@ def sync_wrapper(ff, timeout_override: float | None = None):
     timeout = timeout_override
     if timeout is None:
         timeout = _get_tool_timeout_seconds()
+
+    # dispatch_timeout covers both main-thread dispatch wait + tool execution.
+    # The profile-based timeout (below) provides finer-grained control during
+    # execution; dispatch_timeout is the outer safety net against hangs (#217).
+    dispatch_timeout = timeout + 10.0
+
     if timeout > 0 or cancel_event is not None:
 
         def timed_ff():
@@ -131,8 +173,8 @@ def sync_wrapper(ff, timeout_override: float | None = None):
                 sys.setprofile(old_profile)
 
         timed_ff.__name__ = ff.__name__
-        return _sync_wrapper(timed_ff)
-    return _sync_wrapper(ff)
+        return _sync_wrapper(timed_ff, dispatch_timeout=dispatch_timeout)
+    return _sync_wrapper(ff, dispatch_timeout=dispatch_timeout)
 
 
 def idasync(f):
