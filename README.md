@@ -2,8 +2,6 @@
 
 <div align="center">
 
-**[English](#english)**
-
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
 https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
@@ -14,9 +12,74 @@ The binaries and prompt for the video are available in the [mcp-reversing-datase
 
 ---
 
-<a name="english"></a>
-<details open>
-<summary><h2>🇺🇸 English Documentation</h2></summary>
+## Fork Enhancements
+
+This fork ([fjh658/ida-pro-mcp](https://github.com/fjh658/ida-pro-mcp)) adds the following features on top of [upstream](https://github.com/mrexodia/ida-pro-mcp):
+
+### Broker Architecture (Multi-Instance)
+
+Central HTTP broker that enables **multiple IDA instances** to connect simultaneously. The broker is auto-started by the MCP process — no manual setup needed.
+
+- **Broker mode** (`--broker`): Central registry on `127.0.0.1:13337`, manages IDA connections via HTTP+SSE
+- **MCP mode** (default): Stdio-only client, routes requests to broker via HTTP
+- **Instance routing**: Target specific IDA instances with `instance_id` parameter on any tool call
+- **Auto-reconnect**: IDA plugin reconnects automatically with exponential backoff if broker restarts
+- **Web config**: `/config.html` for CORS policy and per-tool enable/disable
+
+### Enhanced Debugger API
+
+Comprehensive multi-threaded debugger support beyond upstream's basic debugger tools:
+
+| Tool                                       | Description                                                                |
+| ------------------------------------------ | -------------------------------------------------------------------------- |
+| `dbg_regs_all`                             | All registers for all threads                                              |
+| `dbg_gpregs` / `dbg_gpregs_remote`         | General-purpose registers only (architecture-aware: x86/x64, ARM32, ARM64) |
+| `dbg_regs_named` / `dbg_regs_named_remote` | Specific registers by name                                                 |
+| `dbg_regs_remote`                          | All registers for specific thread(s)                                       |
+
+### Microcode Analysis
+
+- `get_microcode(addr, maturity)`: Access Hex-Rays microcode at 8 optimization maturity levels (`generated` through `lvars`), useful for understanding compiler optimizations and analyzing obfuscated code
+
+### Large Output Handling
+
+- **LRU output cache**: Thread-safe `OrderedDict`-based cache (max 100 entries) for large results
+- **Auto-truncation**: Outputs exceeding 50KB are truncated to a 10-item preview with metadata
+- **Download URL**: Full output available via `curl -o output.json http://127.0.0.1:13337/output/{instance_id}/{output_id}.json`
+
+### Thread Safety Hardening
+
+- `rpc.py`: `_output_cache_lock` protects all cache operations
+- `api_instances.py`: `_state_lock` protects all mutable global state; `_connect_lock` serializes connections
+- `http_server.py`: POST body size limit (50MB) prevents OOM; IPv6 `[::1]` localhost support
+- Timer exception safety in reconnect scheduling
+
+### Reverse Engineering Skills
+
+Professional analysis guidance in `skills/` directory:
+
+- **IDAPython skill**: Module router, API patterns, decompilation, type recovery
+- **Reverse engineering skill**: Structured workflow (target gathering -> key functions -> deep analysis -> documentation)
+- **Computed-branch deobfuscation**: Auto-resolves `JUMPOUT(...)` via microcode patching
+- **Swift metadata recovery**: Fixes Swift string xref gaps
+
+### Remote IDA Support
+
+Run IDA on a remote machine while your MCP client runs locally — connected via SSH reverse tunnel. No Python/uv environment needed on remote, just copy the plugin files. See [Remote Setup Guide](docs/remote-setup.md) for details.
+
+### Additional Analysis Tools
+
+- `analyze_funcs(addrs)`: One-call comprehensive analysis — decompilation, assembly, xrefs, callees, callers, strings, constants, basic blocks
+- `find_insns(sequences)`: Find instruction sequences in code (e.g. find all `MOV X0, X1; BL _objc_msgSend` patterns)
+
+### Other Additions
+
+- **IDA 8.3+ compatibility**: Adapter layer for frame/type APIs across IDA 8.3/8.4/8.5/9.0+
+- **Extension groups**: `@ext("dbg")` decorator + `--unsafe` flag for granular tool visibility
+- **Batch APIs**: `rename`, `patch`, `put_int` for bulk operations
+- **Unit tests**: Test framework with IDA stub import hook (`tests/_ida_stubs.py`), 30+ tests covering cache, state management, and concurrency
+
+---
 
 ## Prerequisites
 
@@ -72,12 +135,25 @@ _Note_: You need to load a binary in IDA before the plugin menu will show up.
 
 ## Usage (Broker Mode)
 
-The Broker is **auto-started** when the MCP process launches. If no Broker is detected on `127.0.0.1:13337`, the MCP process will automatically fork one in the background — no manual steps required.
+The entire workflow is **fully automatic** — no manual broker management needed:
 
-```bash
-# 1. Start Cursor / Claude Code — the MCP process auto-starts the Broker
-# 2. Open IDA, load binary, press Ctrl+Alt+M to connect
+1. **MCP client starts the MCP process** — When Cursor/Claude Code/etc. launches, it runs the MCP server via the configured command (e.g. `python3 server.py`). The MCP process detects no Broker on `127.0.0.1:13337` and **auto-forks one** in the background.
+2. **IDA plugin auto-connects** — Open IDA, load a binary, press Ctrl+Alt+M. The plugin connects to `127.0.0.1:13337` automatically with exponential backoff retry, so startup order doesn't matter.
+
+Typical MCP client configuration (e.g. in Claude Code `settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "command": "python3",
+      "args": ["path/to/server.py", "--unsafe"]
+    }
+  }
+}
 ```
+
+The MCP process launched by this config will auto-start the Broker if it's not already running. Multiple MCP clients can share the same Broker — each gets its own stdio MCP process, all routing through the single Broker instance.
 
 To start the Broker manually (e.g. on a custom port):
 
@@ -90,44 +166,44 @@ uv run ida-pro-mcp --broker
 
 - **Broker**: Listener on `127.0.0.1:13337`, holds IDA instance registry; both IDA and MCP clients connect to it. Auto-started by the first MCP process if not already running.
 - **MCP Process**: Started by Cursor per window (stdio), **does not bind port**, requests Broker via HTTP.
-- **IDA Plugin**: Connects to `127.0.0.1:13337` (Broker).
+- **IDA Plugin**: Connects to `127.0.0.1:13337` (Broker). Supports SSH reverse tunnel for remote IDA — see [Remote Setup Guide](docs/remote-setup.md).
 
-```
-┌─────────────────┐     stdio      ┌─────────────────┐     HTTP        ┌─────────────────┐
-│  Cursor Win A   │◄──────────────►│   MCP Process A │─────────────────►│                 │
-└─────────────────┘                └─────────────────┘                 │     Broker      │
-                                                                        │  (unique :13337)│
-┌─────────────────┐     stdio      ┌─────────────────┐     HTTP        │                 │
-│  Cursor Win B   │◄──────────────►│   MCP Process B │─────────────────►│   REGISTRY      │
-└─────────────────┘                └─────────────────┘                 │                 │
-                                                                        └────────▲───────┘
-┌─────────────────┐     HTTP register + SSE                               │
-│   IDA 1/2       │◄───────────────────────────────────────────────────────┘
-└─────────────────┘
-```
+![Architecture](docs/architecture.svg)
+
+### Web Dashboard
+
+Open `http://127.0.0.1:13337/` in a browser to access the Broker dashboard — view all connected IDA instances, their binary paths, architecture info, and connection status in real-time (auto-refresh 10s). Server configuration (CORS policy, per-tool enable/disable) is available at `http://127.0.0.1:13337/config.html`.
 
 ### Multi-Instance Mode
 
-When analyzing multiple binaries simultaneously, just open multiple IDAs and press Ctrl+Alt+M in each.
+When analyzing multiple binaries simultaneously, just open multiple IDAs and press Ctrl+Alt+M in each. **Every tool and resource** accepts an optional `instance_id` parameter to target a specific IDA instance, enabling parallel analysis across multiple binaries.
 
-| Tool | Description |
-|------|-------------|
-| `instance_list` | List all connected IDA instances |
-| `instance_switch` | Switch default instance (prefer passing `instance_id` per-call) |
-| `instance_current` | View current instance info |
-| `instance_info` | Get detailed info for specified instance |
+```
+# Target a specific instance directly (preferred — enables parallel calls)
+decompile addr=0x1234 instance_id=ida-86893-[192.168.1.100]
+
+# Resources also support instance targeting
+ida://functions/main?instance_id=ida-86893-[192.168.1.100]
+```
+
+| Tool               | Description                                                     |
+| ------------------ | --------------------------------------------------------------- |
+| `instance_list`    | List all connected IDA instances                                |
+| `instance_switch`  | Switch default instance (prefer passing `instance_id` per-call) |
+| `instance_current` | View current instance info                                      |
+| `instance_info`    | Get detailed info for specified instance                        |
 
 ## Command Line Arguments
 
-| Argument | Description |
-|----------|-------------|
-| `--install` | Install IDA plugin and MCP client configuration |
-| `--uninstall` | Uninstall IDA plugin and MCP client configuration |
-| `--unsafe` | Enable unsafe tools (debugger related) |
-| `--broker` | **Start Broker only** (HTTP), no stdio; auto-started by MCP process, or run manually for custom setups |
-| `--broker-url URL` | Broker URL for MCP mode, default `http://127.0.0.1:13337` |
-| `--port PORT` | Broker mode listen port, default 13337 |
-| `--config` | Print MCP configuration info |
+| Argument           | Description                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `--install`        | Install IDA plugin and MCP client configuration                                                        |
+| `--uninstall`      | Uninstall IDA plugin and MCP client configuration                                                      |
+| `--unsafe`         | Enable unsafe tools (debugger related)                                                                 |
+| `--broker`         | **Start Broker only** (HTTP), no stdio; auto-started by MCP process, or run manually for custom setups |
+| `--broker-url URL` | Broker URL for MCP mode, default `http://127.0.0.1:13337`                                              |
+| `--port PORT`      | Broker mode listen port, default 13337                                                                 |
+| `--config`         | Print MCP configuration info                                                                           |
 
 ## Prompt Engineering
 
@@ -201,15 +277,9 @@ Another thing to keep in mind is that LLMs will not perform well on obfuscated c
 
 You should also use a tool like Lumina or FLIRT to try and resolve all the open source library code and the C++ STL, this will further improve the accuracy.
 
-## SSE Transport & Headless MCP
+## Headless MCP (idalib)
 
-You can run an SSE server to connect to the user interface like this:
-
-```sh
-uv run ida-pro-mcp --transport http://127.0.0.1:8744/sse
-```
-
-After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can also run a headless SSE server:
+After installing [`idalib`](https://docs.hex-rays.com/user-guide/idalib) you can run a headless MCP server:
 
 ```sh
 uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
@@ -217,30 +287,71 @@ uv run idalib-mcp --host 127.0.0.1 --port 8745 path/to/executable
 
 _Note_: The `idalib` feature was contributed by [Willi Ballenthin](https://github.com/williballenthin).
 
+## Headless idalib Session Model
+
+Use `--isolated-contexts` to enable strict per-transport isolation:
+
+```sh
+uv run idalib-mcp --isolated-contexts --host 127.0.0.1 --port 8745 path/to/executable
+```
+
+### Why use `--isolated-contexts`?
+
+Use it when multiple agents connect to the same `idalib-mcp` server and you want deterministic context isolation:
+
+- Prevent one agent from changing another agent's active session accidentally.
+- Run concurrent analyses safely (for example agent A on binary X and agent B on binary Y).
+- Still allow intentional collaboration by binding multiple agents to the same open session ID.
+- Improve reproducibility because each agent's context binding is explicit.
+
+When `--isolated-contexts` is enabled:
+
+- Each transport context has its own binding (`Mcp-Session-Id` for `/mcp`, `session` for `/sse`, `stdio:default` for stdio).
+- Unbound contexts fail fast for IDB-dependent tools/resources.
+- `idalib_switch(session_id)` and `idalib_open(...)` bind the caller context only.
+
+### Streamable HTTP behavior
+
+With `--isolated-contexts`, strict Streamable HTTP session semantics are enabled, including `Mcp-Session-Id` validation.
+
+### Context tools
+
+- `idalib_open(input_path, ...)`: Open binary and bind it to the active context policy.
+- `idalib_switch(session_id)`: Rebind the active context policy to an existing session.
+- `idalib_current()`: Return the session bound to the active context policy.
+- `idalib_unbind()`: Remove the active context binding.
+- `idalib_list()`: Includes `is_active`, `is_current_context`, and `bound_contexts`.
+
 ## MCP Resources
 
-**Resources** represent browsable state (read-only data) following MCP's philosophy.
+**Resources** represent browsable state (read-only data) following MCP's philosophy. All resources support `?instance_id=<id>` query parameter to target a specific IDA instance (e.g. `ida://functions/main?instance_id=ida-86893-[192.168.1.100]`).
 
 **Core IDB State:**
+
 - `ida://idb/metadata` - IDB file info (path, arch, base, size, hashes)
 - `ida://idb/segments` - Memory segments with permissions
 - `ida://idb/entrypoints` - Entry points (main, TLS callbacks, etc.)
 
 **UI State:**
+
 - `ida://cursor` - Current cursor position and function
 - `ida://selection` - Current selection range
 
 **Type Information:**
+
 - `ida://types` - All local types
 - `ida://structs` - All structures/unions
 - `ida://struct/{name}` - Structure definition with fields
 
 **Lookups:**
+
 - `ida://import/{name}` - Import details by name
 - `ida://export/{name}` - Export details by name
 - `ida://xrefs/from/{addr}` - Cross-references from address
 
 ## Core Functions
+
+All tool functions accept an optional `instance_id` parameter to target a specific IDA instance (e.g. `decompile addr=0x1234 instance_id=ida-86893-[192.168.1.100]`). If omitted, the current active instance is used.
 
 - `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
 - `int_convert(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
@@ -296,6 +407,7 @@ Debugger tools are hidden by default. Enable with `--unsafe` flag:
 ```
 
 **Control:**
+
 - `dbg_start()`: Start debugger process.
 - `dbg_exit()`: Exit debugger process.
 - `dbg_continue()`: Continue execution.
@@ -304,12 +416,14 @@ Debugger tools are hidden by default. Enable with `--unsafe` flag:
 - `dbg_step_over()`: Step over instruction.
 
 **Breakpoints:**
+
 - `dbg_bps()`: List all breakpoints.
 - `dbg_add_bp(addrs)`: Add breakpoint(s).
 - `dbg_delete_bp(addrs)`: Delete breakpoint(s).
 - `dbg_toggle_bp(items)`: Enable/disable breakpoint(s).
 
 **Registers:**
+
 - `dbg_regs()`: All registers, current thread.
 - `dbg_regs_all()`: All registers, all threads.
 - `dbg_regs_remote(tids)`: All registers, specific thread(s).
@@ -319,6 +433,7 @@ Debugger tools are hidden by default. Enable with `--unsafe` flag:
 - `dbg_regs_named_remote(tid, names)`: Named registers, specific thread.
 
 **Stack & Memory:**
+
 - `dbg_stacktrace()`: Call stack with module/symbol info.
 - `dbg_read(regions)`: Read memory from debugged process.
 - `dbg_write(regions)`: Write memory to debugged process.
@@ -327,6 +442,7 @@ Debugger tools are hidden by default. Enable with `--unsafe` flag:
 
 - `py_eval(code)`: Execute arbitrary Python code in IDA context (returns dict with result/stdout/stderr, supports Jupyter-style evaluation).
 - `analyze_funcs(addrs)`: Comprehensive function analysis (decompilation, assembly, xrefs, callees, callers, strings, constants, basic blocks).
+- `get_microcode(addr, maturity)`: Access Hex-Rays microcode at different optimization maturity levels (`generated`, `preoptimized`, `locopt`, `calls`, `glbopt1`-`glbopt3`, `lvars`).
 
 ## Pattern Matching & Search
 
@@ -396,7 +512,7 @@ npx -y @modelcontextprotocol/inspector
 
 This will open a web interface at http://localhost:5173 and allow you to interact with the MCP tools for testing.
 
-For testing I create a symbolic link to the IDA plugin and then POST a JSON-RPC request directly to `http://localhost:13337/mcp`. After [enabling symbolic links](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) you can run the following command:
+For testing, create a symbolic link to the IDA plugin. In Broker mode, use the Broker's API endpoint at `http://localhost:13337/api/instances` to verify connected instances. Run the following command to set up the plugin symlink:
 
 ```sh
 uv run ida-pro-mcp --install
@@ -407,5 +523,3 @@ Generate the changelog of direct commits to `main`:
 ```sh
 git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 ```
-
-</details>

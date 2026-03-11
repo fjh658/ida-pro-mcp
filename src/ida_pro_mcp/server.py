@@ -326,15 +326,15 @@ def _register_ida_tools(enable_unsafe: bool = False):
 def _register_ida_resources():
     """Register all IDA resources with the MCP server"""
     for res_def in _IDA_RESOURCES:
-        def make_wrapper(uri):
+        def make_wrapper(uri, name, description):
             def wrapper(**kwargs):
                 pass
-            wrapper.__name__ = res_def.name
-            wrapper.__doc__ = res_def.description
+            wrapper.__name__ = name
+            wrapper.__doc__ = description
             setattr(wrapper, "__resource_uri__", uri)
             return wrapper
-        
-        mcp.resources.methods[res_def.name] = make_wrapper(res_def.uri)
+
+        mcp.resources.methods[res_def.name] = make_wrapper(res_def.uri, res_def.name, res_def.description)
     
     mcp_log(f"Registered {len(_IDA_RESOURCES)} IDA resources")
 
