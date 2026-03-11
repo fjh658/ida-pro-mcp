@@ -22,9 +22,15 @@ venv*/
 *.id2
 *.til
 *.elf
+!tests/typed_fixture.elf
 
 # macOS
 .DS_Store
 
 # Generated server files
 server_generated.py
+
+# Coverage
+.coverage*
+htmlcov/
+scalene-profile.json

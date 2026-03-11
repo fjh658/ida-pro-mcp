@@ -432,6 +432,7 @@ def get_type_ordinal_limit(til=None) -> int:
 
 def get_image_size() -> int:
     from . import compat
+
     omin_ea = compat.inf_get_omin_ea()
     omax_ea = compat.inf_get_omax_ea()
 
@@ -545,7 +546,7 @@ def get_function(addr: int, *, raise_error: Literal[False]) -> Optional[Function
 
 def get_function(addr, *, raise_error=True):
     from . import compat
-    
+
     fn = idaapi.get_func(addr)
     if fn is None:
         if raise_error:
@@ -554,22 +555,22 @@ def get_function(addr, *, raise_error=True):
 
     name = compat.get_func_name(fn)
 
-    return Function(addr=hex(addr), name=name, size=hex(fn.end_ea - fn.start_ea))
+    return Function(addr=hex(fn.start_ea), name=name, size=hex(fn.end_ea - fn.start_ea))
 
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:
     from . import compat
-    
+
     prototype = compat.get_func_prototype(fn)
     if prototype is not None:
         return str(prototype)
-    
+
     # Fallback: try idc.get_type
     try:
         return idc.get_type(fn.start_ea)
     except Exception:
         pass
-    
+
     return None
 
 
