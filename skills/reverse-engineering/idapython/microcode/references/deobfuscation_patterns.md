@@ -682,7 +682,7 @@ String encryption is better solved at the binary level rather than the microcode
 
 ---
 
-## Pattern 5: MBA-Level Function Boundary Issues
+## Pattern 8: MBA-Level Function Boundary Issues
 
 ### The problem
 After patching indirect jumps, the original function boundaries in IDA are often wrong. The
@@ -726,7 +726,7 @@ def rebuild_func(start_ea, end_ea):
 
 ---
 
-## Pattern 8: Residual JUMPOUT Fix-Up Strategies
+## Pattern 9: Residual JUMPOUT Fix-Up Strategies
 
 When the microcode-level constant propagation succeeds for most cases but a few functions
 still show `JUMPOUT(...)` in the decompiler output, the root causes are usually at the IDB

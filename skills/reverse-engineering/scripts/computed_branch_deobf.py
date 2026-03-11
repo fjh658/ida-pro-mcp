@@ -94,7 +94,7 @@ def _cli_main(script_name, display_name, version):
 _SCRIPT_MODE = False
 
 if __name__ == "__main__":
-    import importlib, sys
+    import importlib.util, sys
     if importlib.util.find_spec("ida_hexrays") is not None:
         _SCRIPT_MODE = True
     else:

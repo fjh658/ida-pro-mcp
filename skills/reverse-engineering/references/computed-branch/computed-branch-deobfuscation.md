@@ -175,7 +175,7 @@ Install via `--install --force`, menus appear under Edit > CB Deobf and right-cl
 If unsafe tools are disabled:
 1. Use `decompile` to identify JUMPOUT functions.
 2. Use `disasm` to trace the arithmetic chain manually.
-3. Use `find_bytes` to locate indirect jump patterns (`FF E0`–`FF E7` for x86, `D6 1F 00 20` for ARM64 RET vs `D6 3F 0?` for BR).
+3. Use `find_bytes` to locate indirect jump patterns (`FF E0`–`FF E7` for x86, `C0 03 5F D6` for ARM64 RET vs `?? ?? 1F D6` for BR Xn) — byte patterns are in memory order (little-endian).
 4. Document findings and recommend running the script in an unsafe-enabled session.
 
 ## Tested Results
