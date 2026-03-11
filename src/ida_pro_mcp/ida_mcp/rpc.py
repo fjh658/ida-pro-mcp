@@ -4,6 +4,7 @@ import os
 import threading
 from typing import Any, Optional
 from .zeromcp import McpRpcRegistry, McpServer, McpToolError, McpHttpRequestHandler
+from .api_instances import DEFAULT_SERVER_URL
 
 MCP_UNSAFE: set[str] = set()
 MCP_EXTENSIONS: dict[str, set[str]] = {}  # group -> set of function names
@@ -17,7 +18,6 @@ OUTPUT_LIMIT_MAX_CHARS = 50000
 OUTPUT_CACHE_MAX_SIZE = 100
 _output_cache: collections.OrderedDict[str, Any] = collections.OrderedDict()
 _output_cache_lock = threading.Lock()
-from .api_instances import DEFAULT_SERVER_URL
 _download_base_url: str = os.environ.get("IDA_MCP_URL", DEFAULT_SERVER_URL)
 _instance_id: str = ""
 
@@ -154,7 +154,7 @@ def _install_tools_call_patch() -> None:
 
         return {
             "structuredContent": preview,
-            "content": response.get("content", []),
+            "content": [{"type": "text", "text": json.dumps(preview)}],
             "isError": False,
         }
 

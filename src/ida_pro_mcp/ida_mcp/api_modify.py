@@ -96,7 +96,7 @@ def set_comments(items: Annotated[list[CommentOp] | CommentOp, "{addr, comment} 
 
             tl = idaapi.treeloc_t()
             tl.ea = nearest_ea
-            for itp in range(idaapi.ITP_SEMI, idaapi.ITP_COLON):
+            for itp in range(idaapi.ITP_SEMI, idaapi.ITP_COLON + 1):
                 tl.itp = itp
                 cfunc.set_user_cmt(tl, comment)
                 cfunc.save_user_cmts()

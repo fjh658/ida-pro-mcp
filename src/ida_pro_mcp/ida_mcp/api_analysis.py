@@ -16,6 +16,7 @@ import ida_idaapi
 import ida_xref
 import ida_ua
 import ida_name
+import ida_idp
 from .rpc import tool
 from .sync import idasync, tool_timeout, IDAError
 from .utils import (
@@ -511,7 +512,7 @@ def callees(
                         break
                     current_ea = next_ea
                     continue
-                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+                if ida_idp.is_call_insn(insn):
                     op0 = insn.ops[0]
                     if op0.type in (ida_ua.o_mem, ida_ua.o_near, ida_ua.o_far):
                         target = op0.addr

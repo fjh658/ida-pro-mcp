@@ -273,7 +273,7 @@ def imports(
         def imp_cb(ea, symbol_name, ordinal, acc):
             if not symbol_name:
                 symbol_name = f"#{ordinal}"
-            acc += [Import(addr=hex(ea), imported_name=symbol_name, module=module_name)]
+            acc.append(Import(addr=hex(ea), imported_name=symbol_name, module=module_name))
             return True
 
         def imp_cb_w_context(ea, symbol_name, ordinal):

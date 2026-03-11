@@ -41,7 +41,10 @@ def get_bytes(regions: Annotated[list[MemoryRead] | MemoryRead, "{addr, size} ob
 
         try:
             ea = parse_address(addr)
-            data = " ".join(f"{x:#02x}" for x in ida_bytes.get_bytes(ea, size))
+            raw = ida_bytes.get_bytes(ea, size)
+            if raw is None:
+                raise ValueError(f"Address range not mapped: {addr}+{size}")
+            data = " ".join(f"{x:#02x}" for x in raw)
             results.append({"addr": addr, "data": data})
         except Exception as e:
             results.append({"addr": addr, "data": None, "error": str(e)})
@@ -250,7 +253,7 @@ def patch(patches: Annotated[list[MemoryPatch] | MemoryPatch, "{addr, data} obje
             )
 
         except Exception as e:
-            results.append({"addr": patch.get("addr"), "size": 0, "error": str(e)})
+            results.append({"addr": patch.get("addr"), "size": 0, "ok": False, "error": str(e)})
 
     return results
 

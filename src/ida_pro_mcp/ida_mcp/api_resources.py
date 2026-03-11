@@ -143,7 +143,7 @@ def selection_resource() -> dict:
 
     start = ida_kernwin.read_range_selection(None)
     if start:
-        return {"start": hex(start[0]), "end": hex(start[1]) if start[1] else None}
+        return {"start": hex(start[0]), "end": hex(start[1]) if start[1] is not None else None}
     return {"selection": None}
 
 

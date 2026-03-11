@@ -1045,8 +1045,8 @@ def define_stkvar_compat(func, name: str, off: int, tif: ida_typeinf.tinfo_t) ->
         flags = getattr(ida_struct, "SET_MEMTI_COMPATIBLE", 0)
         code = ida_struct.set_member_tinfo(frame, member, 0, tif, flags)
         ok_codes = {
-            getattr(ida_struct, "SMT_OK", -1),
-            getattr(ida_struct, "SMT_KEEP", -2),
+            getattr(ida_struct, "SMT_OK", 1),
+            getattr(ida_struct, "SMT_KEEP", 2),
         }
         return code in ok_codes
     except Exception:
