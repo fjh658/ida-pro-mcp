@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Callable, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, unquote
 import sys
 
 
@@ -357,12 +357,17 @@ class IDARequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # Maximum POST body size (10 MB) to prevent OOM from oversized payloads
+    MAX_POST_BODY_SIZE = 50 * 1024 * 1024
+
     def _read_json(self) -> Optional[dict]:
         """Read JSON request body"""
         try:
             length = int(self.headers.get("Content-Length", 0))
             if length == 0:
                 return {}
+            if length > self.MAX_POST_BODY_SIZE:
+                return None
             body = self.rfile.read(length)
             return json.loads(body.decode("utf-8"))
         except Exception:
@@ -410,7 +415,12 @@ class IDARequestHandler(BaseHTTPRequestHandler):
         """Prevent DNS rebinding: only allow localhost Host header."""
         host = self.headers.get("Host", "")
         port = self.server_port
-        if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        allowed = {
+            f"127.0.0.1:{port}",
+            f"localhost:{port}",
+            f"[::1]:{port}",
+        }
+        if host not in allowed:
             self.send_error(403, "Invalid Host")
             return False
         return True
@@ -518,7 +528,7 @@ class IDARequestHandler(BaseHTTPRequestHandler):
             output_match = re.match(r"^/output/([^/]+)/([a-f0-9-]+)\.(\w+)$", path)
             if output_match:
                 self._handle_output_download(
-                    output_match.group(1), output_match.group(2), output_match.group(3)
+                    unquote(output_match.group(1)), output_match.group(2), output_match.group(3)
                 )
             else:
                 self._send_json({"error": "Not found"}, 404)
